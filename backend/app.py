@@ -1,8 +1,12 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, send_from_directory
 import sqlite3
+from flask_cors import CORS
+import os
 
-app = Flask(__name__)
-DB_FILE = "/Users/victorakolo/Desktop/HHI/patient_records.db"  # Using uploaded database
+
+app = Flask(__name__, static_folder="frontend/build", static_url_path="")
+CORS(app)
+DB_FILE = "/Users/victorakolo/Desktop/HHI/database/patient_records.db"
 
 
 # Database Connection
@@ -10,6 +14,13 @@ def db_connection():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
+
+# --------- SERVE REACT FRONTEND ---------
+@app.route("/")
+def serve_react():
+    """Serve the React frontend."""
+    return send_from_directory(app.static_folder, "index.html")
+
 
 
 # --------- PATIENT CRUD OPERATIONS ---------
@@ -57,31 +68,41 @@ def add_patient():
         ))
         conn.commit()
         conn.close()
-        return jsonify({"message": "Patient added successfully"}), 201
+
+        return jsonify({"message": "Patient added successfully", "client_id": data["client_id"]}), 201
     except sqlite3.IntegrityError:
         return jsonify({"error": "Patient with this client_id already exists"}), 400
 
 
+
 # Update a patient's details
-@app.route("/patients/<client_id>", methods=["PUT"])
+@app.route("/patients/<client_id>", methods=["PATCH"])
 def update_patient(client_id):
     data = request.json
     conn = db_connection()
     cursor = conn.cursor()
 
-    cursor.execute('''
-        UPDATE patients SET first_name=?, last_name=?, gender=?, age=?, race=?, primary_lang=?, insurance=?, phone=?, zipcode=?, first_visit_date=?
-        WHERE client_id=?
-    ''', (
-        data["first_name"], data["last_name"], data["gender"], data["age"], data["race"],
-        data["primary_lang"], data["insurance"], data["phone"], data["zipcode"], data["first_visit_date"],
-        client_id
-    ))
+    # Dynamically build the UPDATE query
+    fields = []
+    values = []
 
+    for key, value in data.items():
+        fields.append(f"{key}=?")  # Add column name to update
+        values.append(value)  # Add value for update
+
+    if not fields:
+        return jsonify({"error": "No fields provided to update"}), 400
+
+    # Create final SQL statement
+    sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
+    values.append(client_id)  # Append client_id at the end for WHERE clause
+
+    cursor.execute(sql, tuple(values))
     conn.commit()
     conn.close()
 
     return jsonify({"message": "Patient updated successfully"})
+
 
 
 # Delete a patient
@@ -126,34 +147,43 @@ def add_patient_visit(client_id):
         data["fasting"], data["glucose"], data["height"], data["weight"], data["bmi"], data["a1c"], data["acquired_by"]
     ))
 
+    visit_id = cursor.lastrowid  # Get the auto-generated visit ID from SQLite
     conn.commit()
     conn.close()
-    return jsonify({"message": "Visit added successfully"}), 201
+
+    return jsonify({"message": "Visit added successfully", "visit_id": visit_id}), 201
+
 
 
 # Update a patient's visit
-@app.route("/patients/<client_id>/visits/<int:visit_id>", methods=["PUT"])
+@app.route("/patients/<client_id>/visits/<int:visit_id>", methods=["PATCH"])
 def update_patient_visit(client_id, visit_id):
     data = request.json
     conn = db_connection()
     cursor = conn.cursor()
 
-    cursor.execute('''
-        UPDATE patient_visits
-        SET visit_date=?, event_type=?, referral_source=?, follow_up=?, hra=?, edu=?, case_management=?,
-            systolic=?, diastolic=?, cholesterol=?, fasting=?, glucose=?, height=?, weight=?, bmi=?, a1c=?, acquired_by=?
-        WHERE client_id=? AND id=?
-    ''', (
-        data["visit_date"], data["event_type"], data["referral_source"], data["follow_up"],
-        data["hra"], data["edu"], data["case_management"], data["systolic"], data["diastolic"],
-        data["cholesterol"], data["fasting"], data["glucose"], data["height"], data["weight"],
-        data["bmi"], data["a1c"], data["acquired_by"], client_id, visit_id
-    ))
+    # Dynamically build the UPDATE query based on provided fields
+    fields = []
+    values = []
 
+    for key, value in data.items():
+        fields.append(f"{key}=?")  # Add field to update
+        values.append(value)  # Add value to set
+
+    if not fields:
+        return jsonify({"error": "No fields provided to update"}), 400
+
+    # Create SQL update query
+    sql = f"UPDATE patient_visits SET {', '.join(fields)} WHERE client_id=? AND id=?"
+    values.append(client_id)
+    values.append(visit_id)
+
+    cursor.execute(sql, tuple(values))
     conn.commit()
     conn.close()
 
     return jsonify({"message": "Visit updated successfully"})
+
 
 
 # Delete a visit
@@ -166,6 +196,12 @@ def delete_patient_visit(client_id, visit_id):
     conn.close()
 
     return jsonify({"message": "Visit deleted successfully"})
+
+
+# --------- SERVE REACT STATIC FILES (AFTER BUILD) ---------
+@app.route("/<path:path>")
+def serve_static_files(path):
+    return send_from_directory(app.static_folder, path)
 
 
 # Run the app
