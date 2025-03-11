@@ -246,5 +246,5 @@ print("✅ Successfully updated patient records database with unique records for
 
 """
 extract birthdays and create a column for it
-add visit dates to patient goals
+in app.py, auto generate ID
 """

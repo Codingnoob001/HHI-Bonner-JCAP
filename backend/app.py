@@ -41,14 +41,30 @@ def get_patients():
 def get_patient(client_id):
     conn = db_connection()
     cursor = conn.cursor()
+
+    # Fetch patient details
     cursor.execute("SELECT * FROM patients WHERE client_id = ?", (client_id,))
     patient = cursor.fetchone()
+
+    if not patient:
+        return jsonify({"error": "Patient not found"}), 404
+
+    # Fetch latest goals for the patient (most recent visit date)
+    cursor.execute("""
+        SELECT * FROM patients_goals 
+        WHERE client_id = ? 
+        ORDER BY visit_date DESC 
+        LIMIT 1
+    """, (client_id,))
+    goals = cursor.fetchone()
+
     conn.close()
 
-    if patient:
-        return jsonify(dict(patient))
-    else:
-        return jsonify({"error": "Patient not found"}), 404
+    # Convert data to dictionary
+    patient_data = dict(patient)
+    patient_data["goals"] = dict(goals) if goals else None  # Include latest goals
+
+    return jsonify(patient_data)
 
 
 # Add a new patient
@@ -115,6 +131,83 @@ def delete_patient(client_id):
     conn.close()
 
     return jsonify({"message": "Patient deleted successfully"})
+
+# --------- PATIENT GOALS CRUD OPERATIONS ---------
+
+# Get all goals for a patient
+@app.route("/patients/<client_id>/goals", methods=["GET"])
+def get_patient_goals(client_id):
+    conn = db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM patients_goals WHERE client_id = ?", (client_id,))
+    goals = cursor.fetchall()
+    conn.close()
+
+    if goals:
+        return jsonify([dict(row) for row in goals])
+    else:
+        return jsonify({"error": "No goals found"}), 404
+
+# Add a new goal entry for a patient
+@app.route("/patients/<client_id>/goals", methods=["POST"])
+def add_patient_goals(client_id):
+    data = request.json
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    # Ensure all goal values are either 1 or 0
+    goals_data = {key: (1 if data.get(key) else 0) for key in data if key != "visit_date"}
+    visit_date = data.get("visit_date")
+
+    # Insert or update goals for a visit
+    cursor.execute(f'''
+        INSERT INTO patients_goals (client_id, visit_date, {", ".join(goals_data.keys())})
+        VALUES (?, ?, {", ".join(["?" for _ in goals_data])})
+        ON CONFLICT(client_id, visit_date) DO UPDATE SET
+        {", ".join([f"{goal} = excluded.{goal}" for goal in goals_data.keys()])}
+    ''', (client_id, visit_date) + tuple(goals_data.values()))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Goals added/updated successfully"}), 201
+
+# Update existing goals for a specific visit
+@app.route("/patients/<client_id>/goals/<visit_date>", methods=["PATCH"])
+def update_patient_goals(client_id, visit_date):
+    data = request.json
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    fields = []
+    values = []
+
+    for key, value in data.items():
+        if isinstance(value, bool):
+            fields.append(f"{key}=?")
+            values.append(1 if value else 0)
+
+    if not fields:
+        return jsonify({"error": "No valid goals provided to update"}), 400
+
+    values.append(client_id)
+    values.append(visit_date)
+    sql = f"UPDATE patients_goals SET {', '.join(fields)} WHERE client_id=? AND visit_date=?"
+
+    cursor.execute(sql, tuple(values))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Patient goals updated successfully"})
+
+# Delete goals for a specific visit
+@app.route("/patients/<client_id>/goals/<visit_date>", methods=["DELETE"])
+def delete_patient_goals(client_id, visit_date):
+    conn = db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM patients_goals WHERE client_id = ? AND visit_date = ?", (client_id, visit_date))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Patient goals deleted successfully"})
+
 
 
 # --------- VISIT CRUD OPERATIONS ---------
