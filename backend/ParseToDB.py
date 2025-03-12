@@ -1,12 +1,15 @@
+import os
+
 import pandas as pd
 import sqlite3
+import re
+from dotenv import load_dotenv
 
-excel_files = [
-    "/Users/victorakolo/Desktop/HHI/database/WVHA Outcomes (Database).xlsx",
-    "/Users/victorakolo/Desktop/HHI/database/WVHA Outcomes 2 (Database).xlsx"
-]
-db_file = "../database/patient_records.db"
-conn = sqlite3.connect(db_file)
+load_dotenv()
+EXCEL_FILES = os.getenv("EXCEL_FILES", "").split(",")
+DB_FILE = os.getenv("DB_FILE", "../database/patient_records.db")
+conn = sqlite3.connect(DB_FILE)
+conn.row_factory = sqlite3.Row
 cursor = conn.cursor()
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS patients (
@@ -75,8 +78,25 @@ CREATE TABLE IF NOT EXISTS patients_goals (
 
 conn.commit()
 
+try:
+    cursor.execute("ALTER TABLE patients ADD COLUMN birthdate TEXT;")
+except sqlite3.OperationalError:
+    pass
+
+def extract_birthdate(client_id):
+    match = re.search(r'(\d{2})(\d{2})(\d{2})$', client_id)
+    if match:
+        month, day, year = match.groups()
+        return f"{month}/{day}/{year}"
+    return None
+
+cursor.execute("SELECT client_id, birthdate FROM patients WHERE birthdate IS NOT NULL")
+existing_birthdates = {row["client_id"]: row["birthdate"] for row in cursor.fetchall()}
+
+conn.commit()
+
 first_screen_data = {}
-for excel_file in excel_files:
+for excel_file in EXCEL_FILES:
     print(f"Processing {excel_file}...")
     xls = pd.ExcelFile(excel_file)
     client_list_df = pd.read_excel(xls, sheet_name="CLIENT LIST")
@@ -127,7 +147,7 @@ for excel_file in excel_files:
         else:
             client_list_df[col_name] = 0
     client_list_df = client_list_df[list(column_mapping.keys()) + list(new_value_mapping.keys()) + list(goals_mapping.values())].rename(columns=column_mapping)
-    client_list_df = client_list_df.dropna(subset=["client_id"])  # Remove rows without client_id
+    client_list_df = client_list_df.dropna(subset=["client_id"])
     client_list_df["gender"] = client_list_df["gender"].str.strip().replace({"M": "Male", "F": "Female"})
     client_list_df["follow_up"] = client_list_df["follow_up"].astype(str).replace({"nan": None, "NaN": None})
     client_list_df["fasting"] = client_list_df["fasting"].astype(str).replace({"nan": None, "NaN": None})
@@ -145,6 +165,11 @@ for excel_file in excel_files:
     patient_records = client_list_df.where(pd.notna(client_list_df), None).to_dict(orient="records")
     for row in patient_records:
         client_id = row["client_id"]
+        if client_id not in existing_birthdates:
+            birthdate = extract_birthdate(client_id)
+            if birthdate:
+                cursor.execute("UPDATE patients SET birthdate = ? WHERE client_id = ?", (birthdate, client_id))
+
         if row["first_screen_date"]:
             if client_id not in first_screen_data:
                 first_screen_data[client_id] = {
@@ -245,6 +270,5 @@ conn.close()
 print("✅ Successfully updated patient records database with unique records for each visit.")
 
 """
-extract birthdays and create a column for it
-in app.py, auto generate ID
+fix recreating patient visit every time we run the app
 """

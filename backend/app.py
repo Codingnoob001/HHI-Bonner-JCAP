@@ -1,55 +1,107 @@
-from flask import Flask, request, jsonify, send_from_directory
-import sqlite3
-from flask_cors import CORS
 import os
+from datetime import datetime
+from flask import Flask, request, jsonify, send_from_directory, render_template
+import sqlite3
+from dotenv import load_dotenv
 
 
-app = Flask(__name__, static_folder="frontend/build", static_url_path="")
-CORS(app)
-DB_FILE = "/Users/victorakolo/Desktop/HHI/database/patient_records.db"
+load_dotenv()
+app = Flask(__name__, static_folder="frontend/static", template_folder="frontend/templates")
+DB_FILE = os.getenv("DB_FILE", "database/patient_records.db")
 
 
-# Database Connection
 def db_connection():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     return conn
 
-# --------- SERVE REACT FRONTEND ---------
+def ensure_birthdate_column():
+    conn = db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("ALTER TABLE patients ADD COLUMN birthdate TEXT;")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
+    conn.close()
+
+def standardize_birthdate(birthdate):
+    try:
+        birthdate_obj = datetime.strptime(birthdate, "%m/%d/%Y")
+        return birthdate_obj.strftime("%m/%d/%y")
+    except ValueError:
+        return None
+
+def generate_client_id(first_name, last_name, first_visit_date, birthdate):
+    try:
+        first_initial = first_name[0].upper()
+        last_initial = last_name[0].upper()
+        visit_date_obj = datetime.strptime(first_visit_date, "%m/%d/%Y")
+        visit_month_year = visit_date_obj.strftime("%m%y")  # MMYY format
+
+        return f"{first_initial}{last_initial}{visit_month_year}{birthdate.replace('/', '')}"  # MMDDYY
+    except (IndexError, ValueError):
+        return None
+
+
+ensure_birthdate_column()
+
+# --------- SERVE HTML FRONTEND ---------
 @app.route("/")
-def serve_react():
-    """Serve the React frontend."""
-    return send_from_directory(app.static_folder, "index.html")
+def home():
+    return render_template("index.html")
+
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory("frontend/static", filename)
+
 
 
 
 # --------- PATIENT CRUD OPERATIONS ---------
 
-# Get all patients
 @app.route("/patients", methods=["GET"])
 def get_patients():
     conn = db_connection()
     cursor = conn.cursor()
+
     cursor.execute("SELECT * FROM patients")
     patients = cursor.fetchall()
+
+    cursor.execute("""
+        SELECT g.*
+        FROM patients_goals g
+        INNER JOIN (
+            SELECT client_id, MAX(visit_date) AS latest_visit
+            FROM patients_goals
+            GROUP BY client_id
+        ) latest_goal ON g.client_id = latest_goal.client_id AND g.visit_date = latest_goal.latest_visit
+    """)
+    goals = cursor.fetchall()
+
     conn.close()
-    return jsonify([dict(row) for row in patients])
+
+    patients_list = [dict(patient) for patient in patients]
+    goals_dict = {goal["client_id"]: dict(goal) for goal in goals}  # Map goals by client_id
+
+    for patient in patients_list:
+        patient["goals"] = goals_dict.get(patient["client_id"], None)  # Include latest goals
+
+    return jsonify(patients_list)
 
 
-# Get a single patient by client_id
+
 @app.route("/patients/<client_id>", methods=["GET"])
 def get_patient(client_id):
     conn = db_connection()
     cursor = conn.cursor()
 
-    # Fetch patient details
     cursor.execute("SELECT * FROM patients WHERE client_id = ?", (client_id,))
     patient = cursor.fetchone()
 
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
 
-    # Fetch latest goals for the patient (most recent visit date)
     cursor.execute("""
         SELECT * FROM patients_goals 
         WHERE client_id = ? 
@@ -60,35 +112,43 @@ def get_patient(client_id):
 
     conn.close()
 
-    # Convert data to dictionary
     patient_data = dict(patient)
     patient_data["goals"] = dict(goals) if goals else None  # Include latest goals
 
     return jsonify(patient_data)
 
 
-# Add a new patient
 @app.route("/patients", methods=["POST"])
 def add_patient():
     data = request.json
     conn = db_connection()
     cursor = conn.cursor()
 
+    birthdate = standardize_birthdate(data.get("birthdate"))
+
+    if not birthdate:
+        return jsonify({"error": "Invalid birthdate format. Use MM DD YYYY"}), 400
+
+    client_id = generate_client_id(data["first_name"], data["last_name"], data["first_visit_date"], birthdate)
+
+    if not client_id:
+        return jsonify({"error": "Failed to generate client_id. Ensure valid names and dates."}), 400
+
     try:
         cursor.execute('''
-            INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, insurance, phone, zipcode, first_visit_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, insurance, phone, zipcode, first_visit_date, birthdate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            data["client_id"], data["first_name"], data["last_name"], data["gender"], data["age"],
-            data["race"], data["primary_lang"], data["insurance"], data["phone"], data["zipcode"], data["first_visit_date"]
+            client_id, data["first_name"], data["last_name"], data["gender"], data["age"],
+            data["race"], data["primary_lang"], data["insurance"], data["phone"], data["zipcode"],
+            data["first_visit_date"], birthdate
         ))
         conn.commit()
         conn.close()
 
-        return jsonify({"message": "Patient added successfully", "client_id": data["client_id"]}), 201
+        return jsonify({"message": "Patient added successfully", "client_id": client_id, "birthdate": birthdate}), 201
     except sqlite3.IntegrityError:
         return jsonify({"error": "Patient with this client_id already exists"}), 400
-
 
 
 # Update a patient's details
@@ -98,20 +158,20 @@ def update_patient(client_id):
     conn = db_connection()
     cursor = conn.cursor()
 
-    # Dynamically build the UPDATE query
     fields = []
     values = []
 
     for key, value in data.items():
-        fields.append(f"{key}=?")  # Add column name to update
-        values.append(value)  # Add value for update
+        if key == "birthdate":  # Standardize birthdate if updating
+            value = standardize_birthdate(value)
+        fields.append(f"{key}=?")
+        values.append(value)
 
     if not fields:
         return jsonify({"error": "No fields provided to update"}), 400
 
-    # Create final SQL statement
     sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
-    values.append(client_id)  # Append client_id at the end for WHERE clause
+    values.append(client_id)
 
     cursor.execute(sql, tuple(values))
     conn.commit()
@@ -159,7 +219,6 @@ def add_patient_goals(client_id):
     goals_data = {key: (1 if data.get(key) else 0) for key in data if key != "visit_date"}
     visit_date = data.get("visit_date")
 
-    # Insert or update goals for a visit
     cursor.execute(f'''
         INSERT INTO patients_goals (client_id, visit_date, {", ".join(goals_data.keys())})
         VALUES (?, ?, {", ".join(["?" for _ in goals_data])})
