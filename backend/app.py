@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, render_template
+from flask_cors import CORS # --------- I had to import this for it to work (different ports) ---------
 import sqlite3
 from dotenv import load_dotenv
 
@@ -9,6 +10,7 @@ load_dotenv()
 app = Flask(__name__, static_folder="frontend/static", template_folder="frontend/templates")
 DB_FILE = os.getenv("DB_FILE", "database/patient_records.db")
 
+CORS(app, origins=['http://127.0.0.1:5500'], supports_credentials=True)
 
 def db_connection():
     conn = sqlite3.connect(DB_FILE)

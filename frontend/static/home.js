@@ -1,3 +1,11 @@
+// Scroll to Add Client Section
+function scrollToAddClient() {
+    let formSection = document.getElementById("add-client-form");
+    if (formSection) {
+        formSection.scrollIntoView({ behavior: "smooth" });
+    }
+}
+
 document.getElementById('clientForm').addEventListener('submit', async function(e) {
     e.preventDefault(); // Prevent default form submission behavior
 
