@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory, render_template
-from flask_cors import CORS # --------- I had to import this for it to work (different ports) ---------
+from flask_cors import CORS
 import sqlite3
 from dotenv import load_dotenv
 
@@ -123,26 +123,78 @@ def get_patient(client_id):
     conn = db_connection()
     cursor = conn.cursor()
 
+    # Fetch patient info
     cursor.execute("SELECT * FROM patients WHERE client_id = ?", (client_id,))
     patient = cursor.fetchone()
 
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
 
+    # Fetch all patient visits sorted by visit_date
     cursor.execute("""
-        SELECT * FROM patients_goals 
+        SELECT visit_date, systolic, diastolic, cholesterol, glucose, weight, bmi, a1c 
+        FROM patient_visits 
         WHERE client_id = ? 
-        ORDER BY visit_date DESC 
-        LIMIT 1
+        ORDER BY visit_date ASC
     """, (client_id,))
-    goals = cursor.fetchone()
+
+    visits = cursor.fetchall()
+
+    if not visits:
+        return jsonify({"error": "No visit records found"}), 404
+
+    # Convert visit records to list of dicts
+    visits_list = [dict(row) for row in visits]
+
+    # Calculate changes between last two visits
+    if len(visits_list) > 1:
+        last_visit = visits_list[-2]  # Second last visit
+        recent_visit = visits_list[-1]  # Most recent visit
+
+        def calculate_change(new, old):
+            if old is None or new is None:
+                return None  # If no data, return None
+            return f"+{new - old}" if new > old else f"{new - old}"  # Show + or -
+
+        changes = {
+            "systolic_change": calculate_change(recent_visit["systolic"], last_visit["systolic"]),
+            "diastolic_change": calculate_change(recent_visit["diastolic"], last_visit["diastolic"]),
+            "cholesterol_change": calculate_change(recent_visit["cholesterol"], last_visit["cholesterol"]),
+            "glucose_change": calculate_change(recent_visit["glucose"], last_visit["glucose"]),
+            "weight_change": calculate_change(recent_visit["weight"], last_visit["weight"]),
+            "bmi_change": calculate_change(recent_visit["bmi"], last_visit["bmi"]),
+            "a1c_change": calculate_change(recent_visit["a1c"], last_visit["a1c"])
+        }
+
+        # Calculate weight percentage change
+        if last_visit["weight"] and recent_visit["weight"]:
+            weight_percent_change = ((recent_visit["weight"] - last_visit["weight"]) / last_visit["weight"]) * 100
+            changes["weight_percentage_change"] = f"{weight_percent_change:.2f}%"
+        else:
+            changes["weight_percentage_change"] = None
+
+    else:
+        changes = {
+            "systolic_change": None,
+            "diastolic_change": None,
+            "cholesterol_change": None,
+            "glucose_change": None,
+            "weight_change": None,
+            "bmi_change": None,
+            "a1c_change": None,
+            "weight_percentage_change": None
+        }
 
     conn.close()
 
-    patient_data = dict(patient)
-    patient_data["goals"] = dict(goals) if goals else None  # Include latest goals
+    # Construct response
+    response = {
+        "patient_info": dict(patient),
+        "latest_changes": changes,
+        "trend": visits_list  # Full visit history for visualization
+    }
 
-    return jsonify(patient_data)
+    return jsonify(response)
 
 
 @app.route("/patients", methods=["POST"])
