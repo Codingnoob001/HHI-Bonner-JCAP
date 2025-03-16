@@ -153,8 +153,9 @@ def get_patient(client_id):
 
         def calculate_change(new, old):
             if old is None or new is None:
-                return None  # If no data, return None
-            return f"+{new - old}" if new > old else f"{new - old}"  # Show + or -
+                return None
+            change = round(new - old, 1)
+            return f"+{change}" if change > 0 else f"{change}"
 
         changes = {
             "systolic_change": calculate_change(recent_visit["systolic"], last_visit["systolic"]),
