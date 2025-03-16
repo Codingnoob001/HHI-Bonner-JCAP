@@ -1,5 +1,4 @@
 # Ignore SQLite database files
-*.db
 *.sqlite3
 
 # Ignore SQLite database dumps (optional)
