@@ -1,0 +1,283 @@
+/* General Reset */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+}
+
+.container {
+    display: flex;
+    height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 250px;
+    background: #d3d3d3;
+    padding: 20px;
+    border-top-right-radius: 30px;
+    border-bottom-right-radius: 30px;
+    height: 100vh; /* Makes sidebar full height */
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between; /* Push content to top and bottom */
+}
+
+.welcome-section {
+    font-size: 18px;
+    font-weight: bold;
+    padding-bottom: 50px;
+    border-bottom: 1px solid black; /* Line separator */
+}
+
+.nav-links {
+    list-style: none;
+    margin-top: 15px;
+    flex-grow: 1; /* Push items evenly */
+}
+
+.nav-links li {
+    padding: 15px;
+    cursor: pointer;
+    border-radius: 5px;
+    transition: background 0.1s, color 0.1s;
+}
+
+.nav-links li:hover {
+    background: #bfbfbf; /* Light gray on hover */
+}
+
+.nav-links .active {
+    background: #007bff; /* Blue */
+    color: white;
+    font-weight: bold;
+}
+
+/* Main content */
+.main-content {
+    flex: 1;
+    padding: 30px;
+    overflow-y: auto;
+}
+
+h2 {
+    text-align: center;
+    font-size: 24px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+/* Personal Info Grid */
+
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid #ddd;
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.label {
+    font-weight: bold;
+    color: #747171;
+}
+
+.value {
+    color: #0a0101;
+}
+
+/* Visits Section */
+
+/* No Visits Yet Message */
+#noVisitsMessage {
+    font-size: 16px;
+    color: #777;
+    margin-bottom: 10px;
+}
+
+.add-visit-container {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 15px;
+}
+/* Visit Button */
+.visit-button {
+    background: #007bff;
+    color: white;
+    padding: 10px 15px;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    margin-bottom: 15px;
+}
+
+.visit-button:hover {
+    background: #0056b3;
+}
+
+/* Visit Form */
+.visit-form {
+    background: #f9f9f9;
+    padding: 20px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
+    width: 100%; /* Full width */
+    max-width: 900px; /* Increase max width */
+    margin: 0 auto; /* Center it horizontally */
+}
+
+.visit-form label {
+    font-weight: bold;
+    display: block;
+    margin: 5px 0;
+}
+
+.visit-form input,
+.visit-form select {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+.input-row {
+    display: flex;
+    justify-content: space-between; /* Ensures even spacing */
+    gap: 15px; /* Adds spacing between fields */
+    margin-bottom: 10px;
+    flex-wrap: wrap; /* Prevents issues on smaller screens */
+}
+
+/* Each input box in a row */
+.input-box {
+    flex: 1; /* Makes each field take equal space */
+    min-width: 0; /* Prevents overflow */
+}
+
+
+.input-box input {
+    width: 100%; 
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+
+/* Submit Button */
+.submit-button {
+    padding: 10px 15px;
+    background: #28a745;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    width: 100%;
+}
+
+.submit-button:hover {
+    background: #218838;
+}
+.visit-list {
+    margin-top: 15px;
+}
+
+.visit-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #f9f9f9;
+    padding: 15px;
+    margin: 10px 0;
+    border-radius: 5px;
+    border: 1px solid #ddd;
+    font-weight: bold;
+    width: 100%;
+}
+
+.visit-date {
+    font-size: 16px;
+    font-weight: bold;
+}
+
+.view-results-btn {
+    padding: 8px 15px;
+    background: red;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.view-results-btn:hover {
+    background: darkred;
+}
+
+/* Visit details card - placed below the visit item */
+.visit-details {
+    display: none;
+    background: #f1f1f1;
+    padding: 15px;
+    margin-top: 5px;
+    border-radius: 5px;
+    border: 1px solid #ccc;
+    width: 100%;
+}
+
+.visit-details p {
+    margin: 5px 0;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    font-weight: bold;
+}
+
+.delete-button {
+    padding: 8px 15px;
+    background: darkred;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    width: 100%;
+    margin-top: 10px;
+}
+#popup-container {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1000;
+}
+
+.custom-popup {
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 15px 20px;
+    border-radius: 10px;
+    font-size: 18px;
+    min-width: 250px;
+    text-align: center;
+    opacity: 1;
+    transition: opacity 0.5s;
+    margin-bottom: 10px;
+}
+
+/* Success popup styling */
+.custom-popup.success {
+    background: #28a745;
+}
+
+/* Error popup styling */
+.custom-popup.error {
+    background: #dc3545;
+}
+
