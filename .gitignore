@@ -1,0 +1,40 @@
+# Ignore SQLite database files
+*.db
+*.sqlite3
+
+# Ignore SQLite database dumps (optional)
+# *.sql
+
+# Ignore Python virtual environments
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore dependency directories
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Ignore environment variables and secrets
+.env
+.env.local
+.env.production
+.env.development
+
+# Ignore log and cache files
+logs/
+*.log
+debug.log
+.DS_Store  # macOS system file
+Thumbs.db  # Windows system file
+
+# Ignore build and generated files
+dist/
+build/
+out/
+coverage/
+.idea/       # JetBrains IDE settings
+.vscode/     # VS Code settings

@@ -58,8 +58,6 @@ def static_files(filename):
     return send_from_directory("frontend/static", filename)
 
 
-
-
 # --------- PATIENT CRUD OPERATIONS ---------
 
 @app.route("/patients", methods=["GET"])
@@ -91,6 +89,33 @@ def get_patients():
 
     return jsonify(patients_list)
 
+
+@app.route("/patients/search", methods=["GET"])
+def search_patients():
+    query = request.args.get("query", "").strip()
+    if not query:
+        return jsonify({"error": "Search query is required"}), 400
+    try:
+        conn = db_connection()
+        cursor = conn.cursor()
+        # Search by client ID, first name, last name, birthdate, or age
+        cursor.execute("""
+            SELECT * FROM patients 
+            WHERE client_id LIKE ? 
+            OR first_name LIKE ? 
+            OR last_name LIKE ? 
+            OR birthdate LIKE ? 
+            OR CAST(age AS TEXT) LIKE ?
+        """, (f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%"))
+        results = cursor.fetchall()
+        conn.close()
+        if not results:
+            return jsonify({"message": "No matching patients found"}), 404
+        return jsonify([dict(row) for row in results])
+    except sqlite3.Error as e:
+        return jsonify({"error": "Database error", "details": str(e)}), 500
+    except Exception as e:
+        return jsonify({"error": "Something went wrong", "details": str(e)}), 500
 
 
 @app.route("/patients/<client_id>", methods=["GET"])
