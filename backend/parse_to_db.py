@@ -1,9 +1,7 @@
 import os
 import pandas as pd
 import sqlite3
-import re
 import time
-import datetime
 import logging
 from dotenv import load_dotenv
 
@@ -39,6 +37,79 @@ def execute_with_retry(cursor, query, params=None, is_many=False, max_attempts=M
                 time.sleep(delay)
                 continue
             raise
+
+
+def migrate_database():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    try:
+        # Start a transaction
+        cursor.execute("BEGIN TRANSACTION")
+
+        # Add visit_time column if it doesn't exist
+        cursor.execute("PRAGMA table_info(patient_visits)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        if 'visit_time' not in columns:
+            print("Adding visit_time column to patient_visits table...")
+            cursor.execute("ALTER TABLE patient_visits ADD COLUMN visit_time TEXT;")
+            cursor.execute("UPDATE patient_visits SET visit_time = '12:00' WHERE visit_time IS NULL;")
+        else:
+            print("visit_time column already exists in patient_visits table")
+
+        # Add visit_id column if it doesn't exist
+        cursor.execute("PRAGMA table_info(patients_goals)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        if 'visit_id' not in columns:
+            print("Adding visit_id column to patients_goals table...")
+            cursor.execute("ALTER TABLE patients_goals ADD COLUMN visit_id INTEGER;")
+        else:
+            print("visit_id column already exists in patients_goals table")
+
+        # Create index if it doesn't exist
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_patient_visits_date_time'")
+        if not cursor.fetchone():
+            print("Creating index on patient_visits(visit_date, visit_time)...")
+            cursor.execute(
+                "CREATE INDEX idx_patient_visits_date_time ON patient_visits(visit_date, visit_time)")
+        else:
+            print("Index idx_patient_visits_date_time already exists")
+
+        # Link existing goals to visits with better error handling
+        print("Linking existing goals to visits...")
+        cursor.execute("""
+            UPDATE patients_goals
+            SET visit_id = (
+                SELECT id 
+                FROM patient_visits 
+                WHERE patient_visits.client_id = patients_goals.client_id 
+                AND patient_visits.visit_date = patients_goals.visit_date
+                LIMIT 1
+            )
+            WHERE visit_id IS NULL
+        """)
+
+        # Verify if the linking worked
+        cursor.execute("SELECT COUNT(*) FROM patients_goals WHERE visit_id IS NULL")
+        unlinked_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM patients_goals")
+        total_count = cursor.fetchone()[0]
+
+        if unlinked_count > 0:
+            print(f"Warning: {unlinked_count} out of {total_count} goals could not be linked to visits")
+        else:
+            print(f"Success: All {total_count} goals linked to corresponding visits")
+
+        # Commit the transaction
+        conn.commit()
+        print("Migration completed successfully!")
+    except Exception as e:
+        conn.rollback()
+        print(f"ERROR during migration: {str(e)}")
+    finally:
+        conn.close()
 
 
 conn = sqlite3.connect(DB_FILE)
@@ -87,8 +158,7 @@ CREATE TABLE IF NOT EXISTS patient_visits (
     bmi FLOAT,
     a1c FLOAT,
     acquired_by TEXT,
-    FOREIGN KEY (client_id) REFERENCES patients(client_id),
-    UNIQUE(client_id, visit_date)
+    FOREIGN KEY (client_id) REFERENCES patients(client_id)
 );
 ''')
 
@@ -120,6 +190,10 @@ CREATE TABLE IF NOT EXISTS patients_goals (
 
 conn.commit()
 
+# Run the database migration before processing any files
+print("\nStarting database migration to add visit_time and link goals to visits...")
+migrate_database()
+print("Migration completed. Beginning to process files...")
 
 def extract_birthdate(client_id):
     if client_id and len(client_id) >= 8:
@@ -137,6 +211,7 @@ existing_birthdates = {row["client_id"]: row["birthdate"] for row in cursor.fetc
 logging.info(f"Loaded {len(existing_birthdates)} existing birthdates from database")
 
 birthdate_batch = []
+
 
 def process_birthdate(client_id):
     global birthdate_batch
@@ -482,8 +557,8 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
                                 client_id, visit_date, event_type, referral_source, follow_up,
                                 hra, edu, case_management,
                                 systolic, diastolic, cholesterol, fasting, glucose, height, weight, bmi, a1c,
-                                acquired_by
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                acquired_by, visit_time
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '12:00')
                         ''', records_to_insert, is_many=True)
 
                     patient_visit_first_screen_batch = []
@@ -545,8 +620,8 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
                                 client_id, visit_date, event_type, referral_source, follow_up,
                                 hra, edu, case_management,
                                 systolic, diastolic, cholesterol, fasting, glucose, height, weight, bmi, a1c,
-                                acquired_by
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                acquired_by, visit_time
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '12:00')
                         ''', records_to_insert, is_many=True)
 
                     patient_visit_current_batch = []
@@ -570,6 +645,55 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
         continue
 
 conn.close()
+
+
+def link_goals_to_visits(conn):
+    cursor = conn.cursor()
+    try:
+        # Detailed logging for troubleshooting
+        logging.info("Starting goals to visits linking process...")
+
+        # Update goals with visit_id in a single, efficient query
+        cursor.execute("""
+            UPDATE patients_goals
+            SET visit_id = (
+                SELECT MIN(id)  -- Choose the first visit if multiple exist
+                FROM patient_visits pv
+                WHERE pv.client_id = patients_goals.client_id 
+                  AND pv.visit_date = patients_goals.visit_date
+            )
+            WHERE visit_id IS NULL;
+        """)
+
+        # Log how many goals were linked
+        conn.commit()
+
+        # Verify linking results
+        cursor.execute("SELECT COUNT(*) FROM patients_goals WHERE visit_id IS NULL")
+        unlinked_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM patients_goals")
+        total_goals = cursor.fetchone()[0]
+
+        logging.info(f"Goals to visits linking complete. Total goals: {total_goals}, Unlinked goals: {unlinked_count}")
+
+        if unlinked_count > 0:
+            logging.warning(f"Warning: {unlinked_count} out of {total_goals} goals could not be linked to visits")
+
+        return total_goals, unlinked_count
+
+    except Exception as e:
+        conn.rollback()
+        logging.error(f"Error linking goals to visits: {str(e)}")
+        raise
+
+
+try:
+    conn = sqlite3.connect(DB_FILE)
+    total_goals, unlinked_goals = link_goals_to_visits(conn)
+    print(f"Linked goals to visits. Total goals: {total_goals}, Unlinked: {unlinked_goals}")
+finally:
+    conn.close()
 
 print("✅ Successfully updated patient records database with proper separation of event data and health metrics.")
 logging.info("Patient record import completed successfully")
