@@ -42,6 +42,7 @@ def create_indexes():
     finally:
         conn.close()
 
+
 def ensure_visit_time_column():
     """Ensure visit_time column exists in patient_visits table"""
     conn = db_connection()
@@ -54,6 +55,7 @@ def ensure_visit_time_column():
         pass
     finally:
         conn.close()
+
 
 def ensure_birthdate_column():
     """Ensure birthdate column exists in patients table"""
@@ -91,6 +93,35 @@ def standardize_birthdate(birthdate):
         return None
 
 
+def standardize_date_for_db(date_str):
+    """Convert any date format to YYYY-MM-DD format for database storage"""
+    if not date_str:
+        return None
+
+    try:
+        # First try standard YYYY-MM-DD format
+        if '-' in date_str and len(date_str.split('-')[0]) == 4:
+            datetime.strptime(date_str, "%Y-%m-%d")
+            return date_str
+
+        # Try MM/DD/YYYY format
+        date_obj = datetime.strptime(date_str, "%m/%d/%Y")
+        return date_obj.strftime("%Y-%m-%d")
+    except ValueError:
+        try:
+            # Try other common formats
+            formats = ["%Y/%m/%d", "%m-%d-%Y", "%d/%m/%Y", "%m/%d/%y"]
+            for fmt in formats:
+                try:
+                    date_obj = datetime.strptime(date_str, fmt)
+                    return date_obj.strftime("%Y-%m-%d")
+                except ValueError:
+                    continue
+            return None
+        except Exception:
+            return None
+
+
 def generate_client_id(first_name, last_name, first_visit_date, birthdate):
     """Generate client ID in format: FFMMYYMMDDYY"""
     if not all([first_name, last_name, first_visit_date, birthdate]):
@@ -105,6 +136,42 @@ def generate_client_id(first_name, last_name, first_visit_date, birthdate):
         return f"{first_initial}{last_initial}{visit_month_year}{birthdate.replace('/', '')}"  # MMDDYY
     except (IndexError, ValueError) as e:
         print(f"Error generating client ID: {str(e)}")
+        return None
+
+
+# Function to calculate BMI from height and weight
+def calculate_bmi(height, weight):
+    """
+    Calculate BMI using height (in or cm) and weight (lb or kg)
+
+    If height > 3, assume it's in cm and convert to meters
+    If weight > 150, assume it's in lb and convert to kg
+
+    BMI = weight (kg) / (height (m) * height (m))
+    """
+    if height is None or weight is None:
+        return None
+
+    try:
+        height_val = float(height)
+        weight_val = float(weight)
+
+        # Convert height to meters if needed
+        if height_val > 3:  # Assuming height > 3 means it's in cm
+            height_m = height_val / 100
+        else:  # Height is in meters
+            height_m = height_val
+
+        # Convert weight to kg if needed
+        if weight_val > 150:  # Assuming weight > 150 means it's in pounds
+            weight_kg = weight_val * 0.453592
+        else:  # Weight is in kg
+            weight_kg = weight_val
+
+        # Calculate BMI
+        bmi = weight_kg / (height_m * height_m)
+        return round(bmi, 1)
+    except (ValueError, ZeroDivisionError):
         return None
 
 
@@ -173,7 +240,7 @@ def validate_visit_data(data):
         errors.append("Missing required field: visit_date")
 
     # Validate numeric fields
-    numeric_fields = ["systolic", "diastolic", "cholesterol", "glucose", "height", "weight", "bmi", "a1c"]
+    numeric_fields = ["systolic", "diastolic", "cholesterol", "glucose", "height", "weight", "a1c"]
     for field in numeric_fields:
         if field in data and data[field] is not None:
             try:
@@ -428,21 +495,45 @@ def add_patient():
     cursor = conn.cursor()
 
     try:
+        # Remove goals from patient data
+        patient_data = {k: v for k, v in data.items() if k != "goals"}
+
         cursor.execute('''
             INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, insurance, phone, zipcode, first_visit_date, birthdate)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            client_id, data["first_name"], data["last_name"], data["gender"], data["age"],
-            data.get("race"), data.get("primary_lang"), data.get("insurance"),
-            data.get("phone"), data.get("zipcode"), data["first_visit_date"], birthdate
+            client_id, patient_data["first_name"], patient_data["last_name"], patient_data["gender"],
+            patient_data["age"],
+            patient_data.get("race"), patient_data.get("primary_lang"), patient_data.get("insurance"),
+            patient_data.get("phone"), patient_data.get("zipcode"), patient_data["first_visit_date"], birthdate
         ))
-        conn.commit()
 
+        # If goals are provided with the patient creation, add them
+        if "goals" in data and isinstance(data["goals"], dict):
+            goals_data = {key: 1 if value else 0 for key, value in data["goals"].items()}
+
+            if goals_data:
+                # Convert first_visit_date to YYYY-MM-DD format for goals table
+                formatted_visit_date = standardize_date_for_db(data["first_visit_date"])
+                if formatted_visit_date:
+                    # Insert goals for the patient's first visit date
+                    cursor.execute(f'''
+                        INSERT INTO patients_goals (
+                            client_id, visit_date, {", ".join(goals_data.keys())}
+                        )
+                        VALUES (?, ?, {", ".join(["?" for _ in goals_data])})
+                    ''', (client_id, formatted_visit_date) + tuple(goals_data.values()))
+                else:
+                    print(f"Error: Could not convert visit date '{data['first_visit_date']}' to YYYY-MM-DD format")
+
+        conn.commit()
         conn.close()
+
         return jsonify({
             "message": "Patient added successfully",
             "client_id": client_id,
-            "birthdate": birthdate
+            "birthdate": birthdate,
+            "goals_added": "goals" in data and bool(data["goals"])
         }), 201
 
     except sqlite3.IntegrityError:
@@ -584,19 +675,15 @@ def add_patient_goals(client_id):
 
     # Ensure all goal values are either 1 or 0
     goals_data = {key: (1 if data.get(key) else 0) for key in data if key != "visit_date"}
-    visit_date = data.get("visit_date")
 
-    # Verify visit date is valid
-    try:
-        # Try to parse and standardize the date if needed
-        if "/" in visit_date:
-            date_obj = datetime.strptime(visit_date, "%Y-%m-%d")
-        else:
-            date_obj = datetime.strptime(visit_date, "%Y-%m-%d")
-        visit_date = date_obj.strftime("%Y-%m-%d")
-    except ValueError:
+    # Standardize the visit date to YYYY-MM-DD format
+    original_visit_date = data.get("visit_date")
+    visit_date = standardize_date_for_db(original_visit_date)
+
+    if not visit_date:
         conn.close()
-        return jsonify({"error": "Invalid visit_date format. Use YYYY-MM-DD"}), 400
+        return jsonify({
+                           "error": f"Invalid visit_date format: {original_visit_date}. Use YYYY-MM-DD, MM/DD/YYYY, or other standard date formats"}), 400
 
     # Verify this is a valid visit date for this patient
     cursor.execute(
@@ -760,27 +847,38 @@ def add_patient_visit(client_id):
     if "visit_time" not in data or not data["visit_time"]:
         data["visit_time"] = datetime.now().strftime("%H:%M")
 
+    # Calculate BMI if height and weight are provided
+    height = data.get("height")
+    weight = data.get("weight")
+
+    if height is not None and weight is not None:
+        # Calculate BMI on the backend
+        data["bmi"] = calculate_bmi(height, weight)
+
+    # Create a clean copy of data without the goals field for the visit table
+    visit_data_dict = {k: v for k, v in data.items() if k != "goals"}
+
     # Prepare data for insertion, handling nulls appropriately
     visit_data = [
         client_id,
-        data["visit_date"],
-        data["visit_time"],  # Add visit_time
-        data.get("event_type"),
-        data.get("referral_source"),
-        data.get("follow_up"),
-        data.get("hra"),
-        data.get("edu"),
-        data.get("case_management"),
-        data.get("systolic"),
-        data.get("diastolic"),
-        data.get("cholesterol"),
-        data.get("fasting"),
-        data.get("glucose"),
-        data.get("height"),
-        data.get("weight"),
-        data.get("bmi"),
-        data.get("a1c"),
-        data.get("acquired_by")
+        visit_data_dict["visit_date"],
+        visit_data_dict["visit_time"],  # Add visit_time
+        visit_data_dict.get("event_type"),
+        visit_data_dict.get("referral_source"),
+        visit_data_dict.get("follow_up"),
+        visit_data_dict.get("hra"),
+        visit_data_dict.get("edu"),
+        visit_data_dict.get("case_management"),
+        visit_data_dict.get("systolic"),
+        visit_data_dict.get("diastolic"),
+        visit_data_dict.get("cholesterol"),
+        visit_data_dict.get("fasting"),
+        visit_data_dict.get("glucose"),
+        visit_data_dict.get("height"),
+        visit_data_dict.get("weight"),
+        visit_data_dict.get("bmi"),  # Now calculated on the backend
+        visit_data_dict.get("a1c"),
+        visit_data_dict.get("acquired_by")
     ]
 
     # Standard insert without duplicate check (since you've removed the UNIQUE constraint)
@@ -801,13 +899,19 @@ def add_patient_visit(client_id):
         goals_data = {key: 1 if value else 0 for key, value in data["goals"].items()}
 
         if goals_data:
-            # Create a new goals record with visit_id reference
-            cursor.execute(f'''
-                INSERT INTO patients_goals (
-                    client_id, visit_date, visit_id, {", ".join(goals_data.keys())}
-                )
-                VALUES (?, ?, ?, {", ".join(["?" for _ in goals_data])})
-            ''', (client_id, data["visit_date"], visit_id) + tuple(goals_data.values()))
+            # Standardize the visit date to YYYY-MM-DD format
+            standardized_visit_date = standardize_date_for_db(data["visit_date"])
+
+            if standardized_visit_date:
+                # Create a new goals record with visit_id reference
+                cursor.execute(f'''
+                    INSERT INTO patients_goals (
+                        client_id, visit_date, visit_id, {", ".join(goals_data.keys())}
+                    )
+                    VALUES (?, ?, ?, {", ".join(["?" for _ in goals_data])})
+                ''', (client_id, standardized_visit_date, visit_id) + tuple(goals_data.values()))
+            else:
+                print(f"Error: Could not convert visit date '{data['visit_date']}' to YYYY-MM-DD format")
             conn.commit()
 
     conn.close()
@@ -815,7 +919,8 @@ def add_patient_visit(client_id):
         "message": "Visit added successfully",
         "visit_id": visit_id,
         "visit_time": data["visit_time"],
-        "goals_added": "goals" in data and bool(data["goals"])
+        "goals_added": "goals" in data and bool(data["goals"]),
+        "bmi": data.get("bmi")  # Include calculated BMI in response
     }), 201
 
 
@@ -828,7 +933,7 @@ def update_patient_visit(client_id, visit_id):
         return jsonify({"error": "No data provided"}), 400
 
     # Validate numeric fields
-    numeric_fields = ["systolic", "diastolic", "cholesterol", "glucose", "height", "weight", "bmi", "a1c"]
+    numeric_fields = ["systolic", "diastolic", "cholesterol", "glucose", "height", "weight", "a1c"]
     for field in numeric_fields:
         if field in data and data[field] is not None:
             try:
@@ -848,11 +953,34 @@ def update_patient_visit(client_id, visit_id):
         conn.close()
         return jsonify({"error": "Visit not found"}), 404
 
+    # Calculate BMI if height and weight are present
+    if "height" in data or "weight" in data:
+        # Get current height and weight if not in update data
+        if "height" not in data or "weight" not in data:
+            cursor.execute(
+                "SELECT height, weight FROM patient_visits WHERE client_id = ? AND id = ?",
+                (client_id, visit_id)
+            )
+            current_data = cursor.fetchone()
+
+            height = data.get("height", current_data["height"])
+            weight = data.get("weight", current_data["weight"])
+        else:
+            height = data.get("height")
+            weight = data.get("weight")
+
+        # Calculate and add BMI to update data
+        if height is not None and weight is not None:
+            data["bmi"] = calculate_bmi(height, weight)
+
     # Dynamically build the UPDATE query based on provided fields
     fields = []
     values = []
 
-    for key, value in data.items():
+    # Create a copy of data without the goals field for the visit table update
+    visit_data_dict = {k: v for k, v in data.items() if k != "goals"}
+
+    for key, value in visit_data_dict.items():
         if key not in ("id", "client_id"):  # Skip primary keys
             fields.append(f"{key}=?")
             values.append(value)
@@ -875,13 +1003,20 @@ def update_patient_visit(client_id, visit_id):
         goals_data = {key: 1 if value else 0 for key, value in data["goals"].items()}
 
         if goals_data:
-            # Build and execute the query
-            cursor.execute(f'''
-                INSERT INTO patients_goals (client_id, visit_date, {", ".join(goals_data.keys())})
-                VALUES (?, ?, {", ".join(["?" for _ in goals_data])})
-                ON CONFLICT(client_id, visit_date) DO UPDATE SET
-                {", ".join([f"{goal} = excluded.{goal}" for goal in goals_data.keys()])}
-            ''', (client_id, data["visit_date"]) + tuple(goals_data.values()))
+            # Standardize the visit date to YYYY-MM-DD format
+            standardized_visit_date = standardize_date_for_db(data["visit_date"])
+
+            if standardized_visit_date:
+                # Build and execute the query
+                cursor.execute(f'''
+                    INSERT INTO patients_goals (client_id, visit_date, visit_id, {", ".join(goals_data.keys())})
+                    VALUES (?, ?, ?, {", ".join(["?" for _ in goals_data])})
+                    ON CONFLICT(client_id, visit_date) DO UPDATE SET
+                    visit_id = excluded.visit_id,
+                    {", ".join([f"{goal} = excluded.{goal}" for goal in goals_data.keys()])}
+                ''', (client_id, standardized_visit_date, visit_id) + tuple(goals_data.values()))
+            else:
+                print(f"Error: Could not convert visit date '{data['visit_date']}' to YYYY-MM-DD format")
             conn.commit()
 
     conn.close()
@@ -889,9 +1024,9 @@ def update_patient_visit(client_id, visit_id):
     return jsonify({
         "message": "Visit updated successfully",
         "rows_affected": rows_affected,
-        "goals_updated": "goals" in data and bool(data["goals"])
+        "goals_updated": "goals" in data and bool(data["goals"]),
+        "bmi_calculated": "bmi" in data
     })
-
 
 
 # Delete a visit
@@ -914,6 +1049,14 @@ def delete_patient_visit(client_id, visit_id):
 
     visit_date = visit["visit_date"]
 
+    # Standardize the visit date to ensure format matching between tables
+    standardized_visit_date = standardize_date_for_db(visit_date)
+
+    if not standardized_visit_date:
+        # If we can't standardize the date, use the original (better than nothing)
+        standardized_visit_date = visit_date
+        print(f"Warning: Could not standardize visit date: {visit_date}")
+
     # Begin transaction for atomicity
     cursor.execute("BEGIN TRANSACTION")
     try:
@@ -923,16 +1066,12 @@ def delete_patient_visit(client_id, visit_id):
             (client_id, visit_id)
         )
 
-        # Check if goals should be deleted too
-        delete_goals = request.args.get('delete_goals', 'false').lower() == 'true'
-        if delete_goals:
-            cursor.execute(
-                "DELETE FROM patients_goals WHERE client_id = ? AND visit_date = ?",
-                (client_id, visit_date)
-            )
-            goals_deleted = True
-        else:
-            goals_deleted = False
+        # Try both the standardized and original date format to ensure we find and delete goals
+        cursor.execute(
+            "DELETE FROM patients_goals WHERE client_id = ? AND (visit_date = ? OR visit_date = ?)",
+            (client_id, standardized_visit_date, visit_date)
+        )
+        goals_deleted = True
 
         # Commit changes
         cursor.execute("COMMIT")
@@ -943,8 +1082,7 @@ def delete_patient_visit(client_id, visit_id):
 
     conn.close()
     return jsonify({
-        "message": "Visit deleted successfully",
-        "goals_deleted": goals_deleted
+        "message": "Visit and corresponding goals deleted successfully",
     })
 
 
@@ -1059,6 +1197,7 @@ def get_metrics_report():
         "goals_summary": goals_summary
     })
 
+
 # --------- SERVE REACT STATIC FILES (AFTER BUILD) ---------
 @app.route("/<path:path>")
 def serve_static_files(path):
@@ -1068,5 +1207,3 @@ def serve_static_files(path):
 # Run the app
 if __name__ == "__main__":
     app.run(debug=True, port=5000)  # Runs locally on http://127.0.0.1:5000/
-
-"""Get rid of inability to create multiple visits for a client on same day"""
