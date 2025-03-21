@@ -57,6 +57,38 @@ def migrate_database():
         else:
             print("visit_time column already exists in patient_visits table")
 
+        # Add height column if it doesn't exist
+        cursor.execute("PRAGMA table_info(patients)")
+        columns = [column[1] for column in cursor.fetchall()]
+
+        if 'height' not in columns:
+            print("Adding height column to patients table...")
+            cursor.execute("ALTER TABLE patients ADD COLUMN height FLOAT;")
+
+            # Populate height data from patient_visits
+            cursor.execute("""
+                    UPDATE patients
+                    SET height = (
+                        SELECT height
+                        FROM patient_visits
+                        WHERE patient_visits.client_id = patients.client_id
+                        AND height IS NOT NULL
+                        ORDER BY visit_date
+                        LIMIT 1
+                    )
+                """)
+
+            # Check how many patients got height values
+            cursor.execute("SELECT COUNT(*) FROM patients WHERE height IS NOT NULL")
+            patients_with_height = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM patients")
+            total_patients = cursor.fetchone()[0]
+
+            print(
+                f"Height data migrated: {patients_with_height} out of {total_patients} patients updated with height values")
+        else:
+            print("height column already exists in patients table")
         # Add visit_id column if it doesn't exist
         cursor.execute("PRAGMA table_info(patients_goals)")
         columns = [column[1] for column in cursor.fetchall()]
@@ -133,7 +165,9 @@ CREATE TABLE IF NOT EXISTS patients (
     phone TEXT,
     zipcode TEXT,
     first_visit_date TEXT,
-    birthdate TEXT
+    birthdate TEXT,
+    height FLOAT
+
 );
 ''')
 
@@ -372,7 +406,7 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
             # Add patient data to batch
             patient_data = tuple(row.get(col) for col in ["client_id", "first_name", "last_name", "gender", "age",
                                                           "race", "primary_lang", "insurance", "phone", "zipcode",
-                                                          "first_screen_date"])
+                                                          "first_screen_date"]) + (row.get("height"),)
             patient_batch.append(patient_data)
 
             # Add goals data to batch if visit_date exists
@@ -476,8 +510,8 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
                     # Insert/update patients
                     execute_with_retry(cursor, '''
                         INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, 
-                                            insurance, phone, zipcode, first_visit_date)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            insurance, phone, zipcode, first_visit_date, height)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(client_id) DO UPDATE SET
                             first_name = excluded.first_name,
                             last_name = excluded.last_name,
@@ -488,7 +522,8 @@ for file_index, excel_file in enumerate(EXCEL_FILES):
                             insurance = excluded.insurance,
                             phone = excluded.phone,
                             zipcode = excluded.zipcode,
-                            first_visit_date = COALESCE(patients.first_visit_date, excluded.first_visit_date);
+                            first_visit_date = COALESCE(patients.first_visit_date, excluded.first_visit_date),
+                            height = COALESCE(patients.height, excluded.height);
                     ''', patient_batch, is_many=True)
                     patient_batch = []
 

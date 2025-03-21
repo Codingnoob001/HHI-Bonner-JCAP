@@ -7,10 +7,10 @@ from dotenv import load_dotenv
 import functools
 
 load_dotenv()
-app = Flask(__name__, static_folder="frontend/static", template_folder="frontend/templates")
+app = Flask(__name__, static_folder="dist", static_url_path="")
 DB_FILE = os.getenv("DB_FILE", "database/patient_records.db")
 
-CORS(app, origins=['http://127.0.0.1:5500'], supports_credentials=True)
+CORS(app)
 
 
 # --------- DATABASE SETUP AND UTILITIES ---------
@@ -491,40 +491,59 @@ def add_patient():
     if not client_id:
         return jsonify({"error": "Failed to generate client_id. Ensure valid names and dates."}), 400
 
+    # Extract goals data if present
+    goals_data = data.pop("goals", {})
+
     conn = db_connection()
     cursor = conn.cursor()
 
     try:
-        # Remove goals from patient data
-        patient_data = {k: v for k, v in data.items() if k != "goals"}
-
+        # Insert patient data
         cursor.execute('''
-            INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, insurance, phone, zipcode, first_visit_date, birthdate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, 
+                insurance, phone, zipcode, first_visit_date, birthdate, height)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            client_id, patient_data["first_name"], patient_data["last_name"], patient_data["gender"],
-            patient_data["age"],
-            patient_data.get("race"), patient_data.get("primary_lang"), patient_data.get("insurance"),
-            patient_data.get("phone"), patient_data.get("zipcode"), patient_data["first_visit_date"], birthdate
+            client_id,
+            data.get("first_name"),
+            data.get("last_name"),
+            data.get("gender"),
+            data.get("age"),
+            data.get("race"),
+            data.get("primary_lang"),
+            data.get("insurance"),
+            data.get("phone"),
+            data.get("zipcode"),
+            data.get("first_visit_date"),
+            birthdate,
+            data.get("height")
         ))
 
-        # If goals are provided with the patient creation, add them
-        if "goals" in data and isinstance(data["goals"], dict):
-            goals_data = {key: 1 if value else 0 for key, value in data["goals"].items()}
+        # Handle goals data if provided
+        goals_inserted = False
+        if goals_data and isinstance(goals_data, dict):
+            # Convert boolean/truthy values to 0/1
+            processed_goals = {key: 1 if value else 0 for key, value in goals_data.items()}
 
-            if goals_data:
+            if processed_goals:
                 # Convert first_visit_date to YYYY-MM-DD format for goals table
-                formatted_visit_date = standardize_date_for_db(data["first_visit_date"])
+                formatted_visit_date = standardize_date_for_db(data.get("first_visit_date"))
+
                 if formatted_visit_date:
-                    # Insert goals for the patient's first visit date
-                    cursor.execute(f'''
-                        INSERT INTO patients_goals (
-                            client_id, visit_date, {", ".join(goals_data.keys())}
-                        )
-                        VALUES (?, ?, {", ".join(["?" for _ in goals_data])})
-                    ''', (client_id, formatted_visit_date) + tuple(goals_data.values()))
+                    # Build the goals query - dynamically handle any goal fields provided
+                    goal_fields = list(processed_goals.keys())
+                    placeholders = ", ".join(["?" for _ in processed_goals])
+                    values = list(processed_goals.values())
+
+                    # Insert goals
+                    sql = f"""
+                        INSERT INTO patients_goals (client_id, visit_date, {', '.join(goal_fields)})
+                        VALUES (?, ?, {placeholders})
+                    """
+                    cursor.execute(sql, (client_id, formatted_visit_date) + tuple(values))
+                    goals_inserted = True
                 else:
-                    print(f"Error: Could not convert visit date '{data['first_visit_date']}' to YYYY-MM-DD format")
+                    print(f"Error: Could not convert visit date '{data.get('first_visit_date')}' to YYYY-MM-DD format")
 
         conn.commit()
         conn.close()
@@ -533,7 +552,7 @@ def add_patient():
             "message": "Patient added successfully",
             "client_id": client_id,
             "birthdate": birthdate,
-            "goals_added": "goals" in data and bool(data["goals"])
+            "goals_added": goals_inserted
         }), 201
 
     except sqlite3.IntegrityError:
@@ -557,40 +576,128 @@ def update_patient(client_id):
     # First, check if patient exists
     conn = db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM patients WHERE client_id = ?", (client_id,))
-    if not cursor.fetchone():
+    cursor.execute("SELECT * FROM patients WHERE client_id = ?", (client_id,))
+    patient_record = cursor.fetchone()
+
+    if not patient_record:
         conn.close()
         return jsonify({"error": "Patient not found"}), 404
 
+    # Convert patient record to dict for easier access
+    patient_data = dict(patient_record)
+
+    # Extract goals data if present
+    goals_data = data.pop("goals", None)
+
+    # Process patient information fields
     fields = []
     values = []
 
     for key, value in data.items():
+        # Skip empty values to preserve original data
+        if value is None or value == "":
+            continue
+
         if key == "birthdate" and value:  # Standardize birthdate if updating
             value = standardize_birthdate(value)
             if not value:
                 conn.close()
                 return jsonify({"error": "Invalid birthdate format"}), 400
+
+        if key == "first_visit_date" and value:  # Handle first_visit_date proper formatting
+            value = standardize_date_for_db(value)
+            if not value:
+                conn.close()
+                return jsonify({"error": "Invalid first_visit_date format"}), 400
+
+        # Preserve fields as-is, without converting case
+        # This ensures fields like 'Gender' with 'Male'/'Female' keep their original case
         fields.append(f"{key}=?")
         values.append(value)
 
-    if not fields:
-        conn.close()
-        return jsonify({"error": "No fields provided to update"}), 400
+    if fields:
+        # Update patient information
+        sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
+        values.append(client_id)
 
-    sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
-    values.append(client_id)
+        cursor.execute(sql, tuple(values))
+        patient_updated = cursor.rowcount > 0
+    else:
+        patient_updated = False
 
-    cursor.execute(sql, tuple(values))
-    rows_affected = cursor.rowcount
+    # Handle goals update if goals data is provided
+    goals_updated = False
+    if goals_data and isinstance(goals_data, dict):
+        # Convert boolean/truthy values to 0/1
+        processed_goals = {key: 1 if value else 0 for key, value in goals_data.items()}
+
+        if processed_goals:
+            # Get the visit date to use for goals - prefer the one in the update if provided
+            visit_date_to_use = None
+
+            # Try to use first_visit_date from the update data
+            if "first_visit_date" in data and data["first_visit_date"]:
+                visit_date_to_use = standardize_date_for_db(data["first_visit_date"])
+
+            # If not in update data, use the one from the database
+            if not visit_date_to_use and "first_visit_date" in patient_data and patient_data["first_visit_date"]:
+                visit_date_to_use = standardize_date_for_db(patient_data["first_visit_date"])
+
+            # If we still don't have a valid date, use the most recent visit date
+            if not visit_date_to_use:
+                cursor.execute(
+                    "SELECT MAX(visit_date) as latest_visit FROM patient_visits WHERE client_id = ?",
+                    (client_id,)
+                )
+                result = cursor.fetchone()
+                if result and result['latest_visit']:
+                    visit_date_to_use = result['latest_visit']
+
+            # If we still don't have a valid date, use today's date
+            if not visit_date_to_use:
+                visit_date_to_use = datetime.now().strftime("%Y-%m-%d")
+
+            if visit_date_to_use:
+                # Check if goals record exists for this date
+                cursor.execute(
+                    "SELECT 1 FROM patients_goals WHERE client_id = ? AND visit_date = ?",
+                    (client_id, visit_date_to_use)
+                )
+
+                if cursor.fetchone():
+                    # Update existing goals
+                    goal_fields = list(processed_goals.keys())
+                    update_parts = [f"{field} = ?" for field in goal_fields]
+                    goal_values = list(processed_goals.values())
+
+                    sql = f"UPDATE patients_goals SET {', '.join(update_parts)} WHERE client_id = ? AND visit_date = ?"
+                    goal_values.extend([client_id, visit_date_to_use])
+                    cursor.execute(sql, tuple(goal_values))
+                else:
+                    # Insert new goals record
+                    goal_fields = list(processed_goals.keys())
+                    placeholders = ", ".join(["?" for _ in processed_goals])
+                    goal_values = list(processed_goals.values())
+
+                    sql = f"""
+                        INSERT INTO patients_goals (client_id, visit_date, {', '.join(goal_fields)})
+                        VALUES (?, ?, {placeholders})
+                    """
+                    cursor.execute(sql, (client_id, visit_date_to_use) + tuple(goal_values))
+
+                goals_updated = True
+
     conn.commit()
     conn.close()
 
-    if rows_affected > 0:
-        return jsonify({"message": "Patient updated successfully"})
+    if patient_updated or goals_updated:
+        return jsonify({
+            "message": "Patient updated successfully",
+            "patient_updated": patient_updated,
+            "goals_updated": goals_updated
+        })
     else:
         return jsonify({"message": "No changes made"})
-
 
 # Delete a patient
 @app.route("/patients/<client_id>", methods=["DELETE"])
@@ -1199,10 +1306,17 @@ def get_metrics_report():
 
 
 # --------- SERVE REACT STATIC FILES (AFTER BUILD) ---------
-@app.route("/<path:path>")
-def serve_static_files(path):
-    return send_from_directory(app.static_folder, path)
-
+@app.route('/', defaults={'path': ''})
+@app.route('/<path:path>')
+def serve(path):
+    # Skip API routes
+    if path.startswith('/'):
+        return jsonify({"error": "Not found"}), 404
+        
+    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
+        return send_from_directory(app.static_folder, path)
+    else:
+        return send_from_directory(app.static_folder, 'index.html')
 
 # Run the app
 if __name__ == "__main__":
