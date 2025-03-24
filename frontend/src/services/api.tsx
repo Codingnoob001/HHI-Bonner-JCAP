@@ -79,3 +79,42 @@ searchPatients: (query: string) => {
     return fetchApi(`/patients/${clientId}/visits`);
   }
 };
+
+// Dashboard-specific API endpoints
+export const dashboardApi = {
+  // Get dashboard metrics (stats cards)
+  getMetrics: (startDate?: string, endDate?: string) => {
+    let url = '/dashboard/metrics';
+    
+    // Add date parameters if provided
+    if (startDate && endDate) {
+      url += `?start_date=${startDate}&end_date=${endDate}`;
+    }
+    
+    return fetchApi(url);
+  },
+  
+  getRecentActivity: (limit = 5) => {
+    // Add cache-busting parameter to prevent caching
+    const timestamp = new Date().getTime();
+    return fetchApi(`/dashboard/recent-activity?limit=${limit}&_=${timestamp}`);
+  },
+  
+  clearRecentActivity: () => {
+    return fetchApi('/dashboard/clear-activities', {
+      method: 'POST'
+    });
+  },
+
+  getHistoricalTrends: (points = 7, endDate?: string) => {
+    let url = `/dashboard/historical-trends?points=${points}`;
+    
+    // Add end date if provided
+    if (endDate) {
+      url += `&end_date=${endDate}`;
+    }
+    
+    return fetchApi(url);
+  }
+};
+

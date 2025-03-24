@@ -134,6 +134,23 @@ def migrate_database():
         else:
             print(f"Success: All {total_count} goals linked to corresponding visits")
 
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_log'")
+        if not cursor.fetchone():
+            print("Creating activity_log table...")
+            cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS activity_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        activity_type TEXT NOT NULL,
+                        entity_type TEXT NOT NULL,
+                        entity_id TEXT NOT NULL,
+                        entity_name TEXT,
+                        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+                        additional_info TEXT
+                    )
+                    ''')
+        else:
+            print("activity_log table already exists")
+
         # Commit the transaction
         conn.commit()
         print("Migration completed successfully!")
@@ -168,6 +185,18 @@ CREATE TABLE IF NOT EXISTS patients (
     birthdate TEXT,
     height FLOAT
 
+);
+''')
+
+execute_with_retry(cursor, '''
+CREATE TABLE IF NOT EXISTS activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    activity_type TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    entity_name TEXT,
+    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+    additional_info TEXT
 );
 ''')
 

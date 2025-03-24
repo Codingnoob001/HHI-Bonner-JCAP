@@ -26,7 +26,11 @@ const SearchContext = createContext<SearchContextType>({
   error: null
 });
 
-export const useSearch = () => useContext(SearchContext);
+function useSearchContext() {
+  return useContext(SearchContext);
+}
+
+export const useSearch = useSearchContext;
 
 export const SearchProvider = ({
   children

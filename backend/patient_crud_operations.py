@@ -1,25 +1,32 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, send_from_directory, render_template
 from flask_cors import CORS
 import sqlite3
 from dotenv import load_dotenv
 import functools
 
+
 load_dotenv()
 app = Flask(__name__, static_folder="dist", static_url_path="")
 DB_FILE = os.getenv("DB_FILE", "database/patient_records.db")
 
-CORS(app)
-
+CORS(app, 
+     origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
+     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"])
 
 # --------- DATABASE SETUP AND UTILITIES ---------
 
 def db_connection():
     """Create and return a database connection with row factory"""
-    conn = sqlite3.connect(DB_FILE)
+    conn = sqlite3.connect(DB_FILE, isolation_level=None)  # autocommit mode
     conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA synchronous = FULL")
+    cursor.execute("PRAGMA journal_mode = DELETE")
     return conn
+
 
 
 def create_indexes():
@@ -104,22 +111,30 @@ def standardize_date_for_db(date_str):
             datetime.strptime(date_str, "%Y-%m-%d")
             return date_str
 
-        # Try MM/DD/YYYY format
-        date_obj = datetime.strptime(date_str, "%m/%d/%Y")
-        return date_obj.strftime("%Y-%m-%d")
-    except ValueError:
-        try:
-            # Try other common formats
-            formats = ["%Y/%m/%d", "%m-%d-%Y", "%d/%m/%Y", "%m/%d/%y"]
-            for fmt in formats:
-                try:
-                    date_obj = datetime.strptime(date_str, fmt)
-                    return date_obj.strftime("%Y-%m-%d")
-                except ValueError:
-                    continue
-            return None
-        except Exception:
-            return None
+        # Common date formats to try
+        formats = [
+            "%m/%d/%Y",  # 03/20/2025
+            "%Y/%m/%d",  # 2025/03/20
+            "%m-%d-%Y",  # 03-20-2025
+            "%d/%m/%Y",  # 20/03/2025
+            "%m/%d/%y",  # 03/20/25
+            "%d-%m-%Y",  # 20-03-2025
+            "%Y%m%d"  # 20250320
+        ]
+
+        for fmt in formats:
+            try:
+                date_obj = datetime.strptime(date_str, fmt)
+                return date_obj.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+
+        # If none of the formats work, log this unusual format
+        print(f"Warning: Couldn't standardize date format: {date_str}")
+        return date_str  # Return original rather than None to avoid data loss
+    except Exception as e:
+        print(f"Error in standardize_date_for_db with {date_str}: {str(e)}")
+        return date_str  # Return original rather than None
 
 
 def generate_client_id(first_name, last_name, first_visit_date, birthdate):
@@ -265,6 +280,50 @@ ensure_birthdate_column()
 create_indexes()
 
 
+def ensure_activity_log_table():
+    """Ensure activity_log table exists"""
+    conn = db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            activity_type TEXT NOT NULL,  -- 'create', 'read', 'update', 'delete'
+            entity_type TEXT NOT NULL,    -- 'patient', 'visit', 'goals'
+            entity_id TEXT NOT NULL,      -- client_id, visit_id, etc.
+            entity_name TEXT,             -- patient name, etc.
+            timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+            additional_info TEXT          -- any extra info
+        )
+        ''')
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Error creating activity_log table: {str(e)}")
+    finally:
+        conn.close()
+# Call it during initialization
+ensure_activity_log_table()
+
+def log_activity(activity_type, entity_type, entity_id, entity_name, additional_info=None):
+    """Log an activity in the activity_log table"""
+    try:
+        conn = db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            INSERT INTO activity_log 
+            (activity_type, entity_type, entity_id, entity_name, additional_info)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (activity_type, entity_type, entity_id, entity_name, additional_info))
+        
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"Error logging activity: {str(e)}")
+        return False
+
+
 # --------- SERVE HTML FRONTEND ---------
 @app.route("/")
 def home():
@@ -274,6 +333,30 @@ def home():
 @app.route("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory("frontend/static", filename)
+
+@app.route("/setup", methods=["GET"])
+@handle_errors
+def setup_database():
+    conn = db_connection()
+    cursor = conn.cursor()
+    
+    # Create activity log table if it doesn't exist
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        activity_type TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        entity_name TEXT,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+        additional_info TEXT
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({"message": "Database setup completed"})
 
 
 # --------- PATIENT CRUD OPERATIONS ---------
@@ -483,13 +566,25 @@ def add_patient():
     if validation_errors:
         return jsonify({"error": "Validation failed", "details": validation_errors}), 400
 
-    birthdate = standardize_birthdate(data.get("birthdate"))
-    if not birthdate:
+    # Get and standardize birthdate for validation and client_id generation
+    birthdate_short = standardize_birthdate(data.get("birthdate"))
+    if not birthdate_short:
         return jsonify({"error": "Invalid birthdate format. Use MM/DD/YYYY"}), 400
 
-    client_id = generate_client_id(data["first_name"], data["last_name"], data["first_visit_date"], birthdate)
+    # Generate the client_id using the MM/DD/YY format
+    client_id = generate_client_id(data["first_name"], data["last_name"], data["first_visit_date"], birthdate_short)
     if not client_id:
         return jsonify({"error": "Failed to generate client_id. Ensure valid names and dates."}), 400
+
+    # Now standardize dates for database storage in YYYY-MM-DD format
+    first_visit_date_db = standardize_date_for_db(data.get("first_visit_date"))
+    birthdate_db = standardize_date_for_db(data.get("birthdate"))
+
+    if not first_visit_date_db:
+        return jsonify(
+            {"error": "Invalid first visit date format. Please use MM/DD/YYYY or another recognized format."}), 400
+    if not birthdate_db:
+        return jsonify({"error": "Invalid birthdate format. Please use MM/DD/YYYY or another recognized format."}), 400
 
     # Extract goals data if present
     goals_data = data.pop("goals", {})
@@ -498,7 +593,7 @@ def add_patient():
     cursor = conn.cursor()
 
     try:
-        # Insert patient data
+        # Insert patient data with standardized dates
         cursor.execute('''
             INSERT INTO patients (client_id, first_name, last_name, gender, age, race, primary_lang, 
                 insurance, phone, zipcode, first_visit_date, birthdate, height)
@@ -514,11 +609,10 @@ def add_patient():
             data.get("insurance"),
             data.get("phone"),
             data.get("zipcode"),
-            data.get("first_visit_date"),
-            birthdate,
+            first_visit_date_db,  # Use the standardized YYYY-MM-DD format
+            birthdate_db,  # Use the standardized YYYY-MM-DD format
             data.get("height")
         ))
-
         # Handle goals data if provided
         goals_inserted = False
         if goals_data and isinstance(goals_data, dict):
@@ -544,6 +638,7 @@ def add_patient():
                     goals_inserted = True
                 else:
                     print(f"Error: Could not convert visit date '{data.get('first_visit_date')}' to YYYY-MM-DD format")
+        log_activity('create', 'patient', client_id, f"{data.get('first_name')} {data.get('last_name')}")
 
         conn.commit()
         conn.close()
@@ -551,7 +646,7 @@ def add_patient():
         return jsonify({
             "message": "Patient added successfully",
             "client_id": client_id,
-            "birthdate": birthdate,
+            "birthdate": birthdate_db,
             "goals_added": goals_inserted
         }), 201
 
@@ -560,7 +655,6 @@ def add_patient():
         return jsonify({"error": "Patient with this client_id already exists"}), 400
 
 
-# Update a patient's details
 @app.route("/patients/<client_id>", methods=["PATCH"])
 @handle_errors
 def update_patient(client_id):
@@ -598,11 +692,19 @@ def update_patient(client_id):
         if value is None or value == "":
             continue
 
+        # In update_patient, change this section:
         if key == "birthdate" and value:  # Standardize birthdate if updating
-            value = standardize_birthdate(value)
-            if not value:
+            # First get the MM/DD/YY format for validation
+            value_short = standardize_birthdate(value)
+            if not value_short:
                 conn.close()
                 return jsonify({"error": "Invalid birthdate format"}), 400
+
+            # But store the YYYY-MM-DD format in the database
+            value = standardize_date_for_db(value)
+            if not value:
+                conn.close()
+                return jsonify({"error": "Failed to convert birthdate to standard format"}), 400
 
         if key == "first_visit_date" and value:  # Handle first_visit_date proper formatting
             value = standardize_date_for_db(value)
@@ -615,79 +717,120 @@ def update_patient(client_id):
         fields.append(f"{key}=?")
         values.append(value)
 
-    if fields:
-        # Update patient information
-        sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
-        values.append(client_id)
-
-        cursor.execute(sql, tuple(values))
-        patient_updated = cursor.rowcount > 0
-    else:
-        patient_updated = False
-
-    # Handle goals update if goals data is provided
+    patient_updated = False
     goals_updated = False
-    if goals_data and isinstance(goals_data, dict):
-        # Convert boolean/truthy values to 0/1
-        processed_goals = {key: 1 if value else 0 for key, value in goals_data.items()}
 
-        if processed_goals:
-            # Get the visit date to use for goals - prefer the one in the update if provided
-            visit_date_to_use = None
+    try:
+        # Begin transaction
+        cursor.execute("BEGIN TRANSACTION")
 
-            # Try to use first_visit_date from the update data
-            if "first_visit_date" in data and data["first_visit_date"]:
-                visit_date_to_use = standardize_date_for_db(data["first_visit_date"])
+        # Update patient information if there are fields to update
+        if fields:
+            # Update patient information
+            sql = f"UPDATE patients SET {', '.join(fields)} WHERE client_id=?"
+            values.append(client_id)
 
-            # If not in update data, use the one from the database
-            if not visit_date_to_use and "first_visit_date" in patient_data and patient_data["first_visit_date"]:
-                visit_date_to_use = standardize_date_for_db(patient_data["first_visit_date"])
+            cursor.execute(sql, tuple(values))
+            patient_updated = cursor.rowcount > 0
 
-            # If we still don't have a valid date, use the most recent visit date
-            if not visit_date_to_use:
-                cursor.execute(
-                    "SELECT MAX(visit_date) as latest_visit FROM patient_visits WHERE client_id = ?",
-                    (client_id,)
-                )
-                result = cursor.fetchone()
-                if result and result['latest_visit']:
-                    visit_date_to_use = result['latest_visit']
+        # Handle goals update if goals data is provided
+        if goals_data and isinstance(goals_data, dict):
+            # Convert boolean/truthy values to 0/1
+            processed_goals = {key: 1 if value else 0 for key, value in goals_data.items()}
 
-            # If we still don't have a valid date, use today's date
-            if not visit_date_to_use:
-                visit_date_to_use = datetime.now().strftime("%Y-%m-%d")
+            if processed_goals:
+                # Get the visit date to use for goals - prefer the one in the update if provided
+                visit_date_to_use = None
 
-            if visit_date_to_use:
-                # Check if goals record exists for this date
-                cursor.execute(
-                    "SELECT 1 FROM patients_goals WHERE client_id = ? AND visit_date = ?",
-                    (client_id, visit_date_to_use)
-                )
+                # Try to use first_visit_date from the update data
+                if "first_visit_date" in data and data["first_visit_date"]:
+                    visit_date_to_use = standardize_date_for_db(data["first_visit_date"])
 
-                if cursor.fetchone():
-                    # Update existing goals
-                    goal_fields = list(processed_goals.keys())
-                    update_parts = [f"{field} = ?" for field in goal_fields]
-                    goal_values = list(processed_goals.values())
+                # If not in update data, use the one from the database
+                if not visit_date_to_use and "first_visit_date" in patient_data and patient_data["first_visit_date"]:
+                    visit_date_to_use = standardize_date_for_db(patient_data["first_visit_date"])
 
-                    sql = f"UPDATE patients_goals SET {', '.join(update_parts)} WHERE client_id = ? AND visit_date = ?"
-                    goal_values.extend([client_id, visit_date_to_use])
-                    cursor.execute(sql, tuple(goal_values))
-                else:
-                    # Insert new goals record
-                    goal_fields = list(processed_goals.keys())
-                    placeholders = ", ".join(["?" for _ in processed_goals])
-                    goal_values = list(processed_goals.values())
+                # If we still don't have a valid date, use the most recent visit date
+                if not visit_date_to_use:
+                    cursor.execute(
+                        "SELECT MAX(visit_date) as latest_visit FROM patient_visits WHERE client_id = ?",
+                        (client_id,)
+                    )
+                    result = cursor.fetchone()
+                    if result and result['latest_visit']:
+                        visit_date_to_use = result['latest_visit']
 
-                    sql = f"""
-                        INSERT INTO patients_goals (client_id, visit_date, {', '.join(goal_fields)})
-                        VALUES (?, ?, {placeholders})
-                    """
-                    cursor.execute(sql, (client_id, visit_date_to_use) + tuple(goal_values))
+                # If we still don't have a valid date, use today's date
+                if not visit_date_to_use:
+                    visit_date_to_use = datetime.now().strftime("%Y-%m-%d")
 
-                goals_updated = True
+                if visit_date_to_use:
+                    # Check if goals record exists for this date
+                    cursor.execute(
+                        "SELECT 1 FROM patients_goals WHERE client_id = ? AND visit_date = ?",
+                        (client_id, visit_date_to_use)
+                    )
 
-    conn.commit()
+                    if cursor.fetchone():
+                        # Update existing goals
+                        goal_fields = list(processed_goals.keys())
+                        update_parts = [f"{field} = ?" for field in goal_fields]
+                        goal_values = list(processed_goals.values())
+
+                        sql = f"UPDATE patients_goals SET {', '.join(update_parts)} WHERE client_id = ? AND visit_date = ?"
+                        goal_values.extend([client_id, visit_date_to_use])
+                        cursor.execute(sql, tuple(goal_values))
+                    else:
+                        # Insert new goals record
+                        goal_fields = list(processed_goals.keys())
+                        placeholders = ", ".join(["?" for _ in processed_goals])
+                        goal_values = list(processed_goals.values())
+
+                        sql = f"""
+                            INSERT INTO patients_goals (client_id, visit_date, {', '.join(goal_fields)})
+                            VALUES (?, ?, {placeholders})
+                        """
+                        cursor.execute(sql, (client_id, visit_date_to_use) + tuple(goal_values))
+
+                    goals_updated = True
+
+        # Log the update in activity_log if activity tracking is enabled
+        try:
+            # Get the patient name
+            patient_name = f"{patient_data['first_name']} {patient_data['last_name']}"
+
+            # Check if activity_log table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_log'")
+            if cursor.fetchone():
+                cursor.execute('''
+                    INSERT INTO activity_log (activity_type, entity_type, entity_id, entity_name)
+                    VALUES (?, ?, ?, ?)
+                ''', ('update', 'patient', client_id, patient_name))
+        except Exception as log_error:
+            # Don't fail the update if logging fails
+            print(f"Error logging update activity: {str(log_error)}")
+
+        # Commit all changes
+        cursor.execute("COMMIT")
+
+    except Exception as e:
+        # Roll back on error
+        try:
+            cursor.execute("ROLLBACK")
+        except:
+            pass  # If rollback fails, continue to close connection
+
+        print(f"Error updating patient: {str(e)}")
+        import traceback
+        traceback.print_exc()
+
+        # Ensure the connection gets closed
+        conn.close()
+
+        # Re-raise the exception to be handled by the @handle_errors decorator
+        raise e
+
+    # Close the connection after successful transaction
     conn.close()
 
     if patient_updated or goals_updated:
@@ -706,34 +849,40 @@ def delete_patient(client_id):
     conn = db_connection()
     cursor = conn.cursor()
 
-    # Begin transaction to ensure all related records are deleted
+    # Get the patient name before deleting
+    cursor.execute("SELECT first_name || ' ' || last_name as name FROM patients WHERE client_id = ?", (client_id,))
+    patient = cursor.fetchone()
+
+    if not patient:
+        conn.close()
+        return jsonify({"error": "Patient not found"}), 404
+
+    patient_name = patient["name"]
+
+    # Begin transaction
     cursor.execute("BEGIN TRANSACTION")
     try:
-        # Delete related records first
+        # Delete related records
         cursor.execute("DELETE FROM patient_visits WHERE client_id = ?", (client_id,))
         cursor.execute("DELETE FROM patients_goals WHERE client_id = ?", (client_id,))
-
-        # Then delete the patient
         cursor.execute("DELETE FROM patients WHERE client_id = ?", (client_id,))
 
-        # Check if patient was found and deleted
-        if cursor.rowcount == 0:
-            # Rollback and return error if patient not found
-            cursor.execute("ROLLBACK")
-            conn.close()
-            return jsonify({"error": "Patient not found"}), 404
+        # Log the deletion in activity_log
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_log'")
+        if cursor.fetchone():
+            cursor.execute('''
+                INSERT INTO activity_log (activity_type, entity_type, entity_id, entity_name)
+                VALUES (?, ?, ?, ?)
+            ''', ('delete', 'patient', client_id, patient_name))
 
-        # Commit the transaction if all operations succeeded
         cursor.execute("COMMIT")
     except Exception as e:
-        # Rollback on any error
         cursor.execute("ROLLBACK")
         conn.close()
         raise e
 
     conn.close()
-    return jsonify({"message": "Patient and all related records deleted successfully"})
-
+    return jsonify({"message": "Patient deleted successfully"})
 
 # --------- PATIENT GOALS CRUD OPERATIONS ---------
 
@@ -941,6 +1090,9 @@ def add_patient_visit(client_id):
     validation_errors = validate_visit_data(data)
     if validation_errors:
         return jsonify({"error": "Validation failed", "details": validation_errors}), 400
+    data["visit_date"] = standardize_date_for_db(data["visit_date"])
+    if not data["visit_date"]:
+        return jsonify({"error": "Invalid visit date format. Please use YYYY-MM-DD format."}), 400
 
     # Verify patient exists
     conn = db_connection()
@@ -1021,6 +1173,10 @@ def add_patient_visit(client_id):
                 print(f"Error: Could not convert visit date '{data['visit_date']}' to YYYY-MM-DD format")
             conn.commit()
 
+    cursor.execute("SELECT first_name || ' ' || last_name as name FROM patients WHERE client_id = ?", (client_id,))
+    patient_name = cursor.fetchone()["name"]
+    log_activity('create', 'visit', str(visit_id), patient_name, f"Visit date: {data['visit_date']}")
+
     conn.close()
     return jsonify({
         "message": "Visit added successfully",
@@ -1047,6 +1203,11 @@ def update_patient_visit(client_id, visit_id):
                 data[field] = float(data[field])
             except (ValueError, TypeError):
                 return jsonify({"error": f"{field} must be a number"}), 400
+    if "visit_date" in data:
+        # Ensure the visit_date is in YYYY-MM-DD format
+        data["visit_date"] = standardize_date_for_db(data["visit_date"])
+        if not data["visit_date"]:
+            return jsonify({"error": "Invalid visit date format. Please use YYYY-MM-DD format."}), 400
 
     conn = db_connection()
     cursor = conn.cursor()
@@ -1136,33 +1297,25 @@ def update_patient_visit(client_id, visit_id):
     })
 
 
-# Delete a visit
 @app.route("/patients/<client_id>/visits/<int:visit_id>", methods=["DELETE"])
 @handle_errors
 def delete_patient_visit(client_id, visit_id):
     conn = db_connection()
     cursor = conn.cursor()
 
-    # First get the visit_date to possibly delete associated goals
-    cursor.execute(
-        "SELECT visit_date FROM patient_visits WHERE client_id = ? AND id = ?",
-        (client_id, visit_id)
-    )
-    visit = cursor.fetchone()
-
-    if not visit:
+    # First get the patient name and visit date
+    cursor.execute('''
+        SELECT p.first_name || ' ' || p.last_name as patient_name, v.visit_date
+        FROM patient_visits v
+        JOIN patients p ON v.client_id = p.client_id
+        WHERE v.client_id = ? AND v.id = ?
+    ''', (client_id, visit_id))
+    
+    visit_info = cursor.fetchone()
+    
+    if not visit_info:
         conn.close()
         return jsonify({"error": "Visit not found"}), 404
-
-    visit_date = visit["visit_date"]
-
-    # Standardize the visit date to ensure format matching between tables
-    standardized_visit_date = standardize_date_for_db(visit_date)
-
-    if not standardized_visit_date:
-        # If we can't standardize the date, use the original (better than nothing)
-        standardized_visit_date = visit_date
-        print(f"Warning: Could not standardize visit date: {visit_date}")
 
     # Begin transaction for atomicity
     cursor.execute("BEGIN TRANSACTION")
@@ -1173,12 +1326,17 @@ def delete_patient_visit(client_id, visit_id):
             (client_id, visit_id)
         )
 
-        # Try both the standardized and original date format to ensure we find and delete goals
+        # Delete associated goals
         cursor.execute(
-            "DELETE FROM patients_goals WHERE client_id = ? AND (visit_date = ? OR visit_date = ?)",
-            (client_id, standardized_visit_date, visit_date)
+            "DELETE FROM patients_goals WHERE client_id = ? AND visit_date = ?",
+            (client_id, visit_info["visit_date"])
         )
-        goals_deleted = True
+        
+        # Add to activity log
+        cursor.execute('''
+            INSERT INTO activity_log (activity_type, entity_type, entity_id, entity_name, additional_info)
+            VALUES (?, ?, ?, ?, ?)
+        ''', ('delete', 'visit', str(visit_id), visit_info["patient_name"], f"Visit date: {visit_info['visit_date']}"))
 
         # Commit changes
         cursor.execute("COMMIT")
@@ -1188,121 +1346,541 @@ def delete_patient_visit(client_id, visit_id):
         raise e
 
     conn.close()
-    return jsonify({
-        "message": "Visit and corresponding goals deleted successfully",
-    })
+    return jsonify({"message": "Visit and corresponding goals deleted successfully"})
 
-
-# --------- REPORTING ENDPOINTS ---------
-
-@app.route("/reports/metrics", methods=["GET"])
+# --------- DASHBOARD ENDPOINTS ---------
+# --------- DASHBOARD ENDPOINTS ---------
+@app.route("/dashboard/metrics", methods=["GET"])
 @handle_errors
-def get_metrics_report():
-    """Get aggregate metrics report"""
+def get_dashboard_metrics():
+    """
+    Get dashboard metrics including:
+    - Total patients count with percentage change
+    - New patients within date range with percentage change
+    - Total visits within date range with percentage change
+    - Follow-up compliance percentage with change
+    """
+    # Get date range from query parameters
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
 
-    # Validate dates
-    if start_date:
-        try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-        except ValueError:
-            return jsonify({"error": "Invalid start_date format. Use YYYY-MM-DD"}), 400
+    # If no dates provided, default to today and 6 months ago
+    today = datetime.now()
+    if not end_date:
+        end_date = today.strftime("%Y-%m-%d")
+    if not start_date:
+        start_date = (today - timedelta(days=180)).strftime("%Y-%m-%d")
 
-    if end_date:
+    # Get comparison period (for calculating percentage changes)
+    comparison_start = request.args.get('comparison_start')
+    comparison_end = request.args.get('comparison_end')
+
+    # Validate dates
+    for date_str in [start_date, end_date, comparison_start, comparison_end]:
+        if date_str and not is_valid_date(date_str):
+            return jsonify({"error": f"Invalid date format: {date_str}. Use YYYY-MM-DD"}), 400
+
+    # If no comparison period is provided, calculate previous 6 months before the start date
+    if not comparison_start or not comparison_end:
         try:
-            datetime.strptime(end_date, "%Y-%m-%d")
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            comparison_end = (start_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            comparison_start = (start_dt - timedelta(days=180)).strftime("%Y-%m-%d")
         except ValueError:
-            return jsonify({"error": "Invalid end_date format. Use YYYY-MM-DD"}), 400
+            # If any error occurs, use reasonable defaults
+            comparison_end = (today - timedelta(days=181)).strftime("%Y-%m-%d")
+            comparison_start = (today - timedelta(days=360)).strftime("%Y-%m-%d")
 
     conn = db_connection()
     cursor = conn.cursor()
 
-    # Base query parts
-    date_filter = ""
-    params = []
+    # --- 1. Total Patients ---
+    # Current total patients count
+    cursor.execute("SELECT COUNT(*) as count FROM patients")
+    total_patients = cursor.fetchone()["count"]
+
+    # Calculate total patients percentage change
+    total_patients_change = calculate_patient_growth(cursor, start_date, end_date, comparison_start, comparison_end)
+
+    # --- 2. New Patients in Date Range ---
+    new_patients_count = 0
+    new_patients_change = 0
 
     if start_date and end_date:
-        date_filter = "WHERE visit_date BETWEEN ? AND ?"
-        params = [start_date, end_date]
-    elif start_date:
-        date_filter = "WHERE visit_date >= ?"
-        params = [start_date]
-    elif end_date:
-        date_filter = "WHERE visit_date <= ?"
-        params = [end_date]
+        # Count patients whose first_visit_date is within the selected range
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM patients 
+            WHERE strftime('%Y-%m-%d', first_visit_date) BETWEEN ? AND ?
+        """, (start_date, end_date))
+        new_patients_count = cursor.fetchone()["count"]
 
-    # Patient count
-    cursor.execute("SELECT COUNT(*) as total_patients FROM patients")
-    total_patients = cursor.fetchone()["total_patients"]
+        # Calculate new patients percentage change
+        if comparison_start and comparison_end:
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM patients 
+                WHERE strftime('%Y-%m-%d', first_visit_date) BETWEEN ? AND ?
+            """, (comparison_start, comparison_end))
 
-    # Visit count
-    cursor.execute(f"SELECT COUNT(*) as total_visits FROM patient_visits {date_filter}", params)
-    total_visits = cursor.fetchone()["total_visits"]
+            previous_new_patients = cursor.fetchone()["count"]
+            if previous_new_patients > 0:
+                new_patients_change = ((new_patients_count - previous_new_patients) / previous_new_patients) * 100
+            elif new_patients_count > 0:
+                new_patients_change = 100  # If previous was 0 and current is not, that's a 100% increase
+            else:
+                new_patients_change = 0
 
-    # Average metrics
-    cursor.execute(f"""
-        SELECT 
-            AVG(systolic) as avg_systolic,
-            AVG(diastolic) as avg_diastolic,
-            AVG(cholesterol) as avg_cholesterol,
-            AVG(glucose) as avg_glucose,
-            AVG(weight) as avg_weight,
-            AVG(bmi) as avg_bmi,
-            AVG(a1c) as avg_a1c
-        FROM patient_visits
-        {date_filter}
-    """, params)
-    avg_metrics = cursor.fetchone()
-    avg_metrics_dict = dict(avg_metrics) if avg_metrics else {}
+    # --- 3. Total Visits ---
+    visits_count = 0
+    visits_change = 0
 
-    # Goals summary
-    cursor.execute(f"""
-        SELECT 
-            SUM(increased_fruit_veg) as total_increased_fruit_veg,
-            SUM(increased_water) as total_increased_water,
-            SUM(increased_exercise) as total_increased_exercise,
-            SUM(cut_tv_viewing) as total_cut_tv_viewing,
-            SUM(eat_breakfast) as total_eat_breakfast,
-            SUM(limit_alcohol) as total_limit_alcohol,
-            SUM(no_late_eating) as total_no_late_eating,
-            SUM(more_whole_grains) as total_more_whole_grains,
-            SUM(less_fried_foods) as total_less_fried_foods,
-            SUM(low_fat_milk) as total_low_fat_milk,
-            SUM(lower_salt) as total_lower_salt,
-            SUM(annual_checkup) as total_annual_checkup,
-            SUM(quit_smoking) as total_quit_smoking,
-            COUNT(*) as total_goal_records
-        FROM patients_goals
-        {date_filter}
-    """, params)
+    if start_date and end_date:
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM patient_visits 
+            WHERE visit_date BETWEEN ? AND ?
+        """, (start_date, end_date))
+        visits_count = cursor.fetchone()["count"]
 
-    goals_row = cursor.fetchone()
-    goals_summary = dict(goals_row) if goals_row else {}
+        # Calculate visits percentage change
+        if comparison_start and comparison_end:
+            cursor.execute("""
+                SELECT COUNT(*) as count FROM patient_visits 
+                WHERE visit_date BETWEEN ? AND ?
+            """, (comparison_start, comparison_end))
 
-    # Calculate goal percentages separately (not during iteration)
-    goals_percentages = {}
-    if 'total_goal_records' in goals_summary and goals_summary["total_goal_records"] > 0:
-        total_records = goals_summary["total_goal_records"]
-        for key in list(goals_summary.keys()):  # Create a new list from the keys
-            if key != "total_goal_records" and goals_summary[key] is not None:
-                goals_percentages[f"{key}_percent"] = round((goals_summary[key] / total_records) * 100, 1)
+            previous_visits = cursor.fetchone()["count"]
+            if previous_visits > 0:
+                visits_change = ((visits_count - previous_visits) / previous_visits) * 100
+            elif visits_count > 0:
+                visits_change = 100  # If previous was 0 and current is not, that's a 100% increase
+            else:
+                visits_change = 0
 
-    # Merge the dictionaries
-    goals_summary.update(goals_percentages)
+    # --- 4. Follow-up Compliance ---
+    compliance_percentage = 0
+    compliance_change = 0
+
+    if start_date and end_date:
+        # Count total follow-ups scheduled in the date range
+        cursor.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN follow_up = 'COMPLIANT' THEN 1 ELSE 0 END) as compliant
+            FROM patient_visits 
+            WHERE visit_date BETWEEN ? AND ?
+        """, (start_date, end_date))
+
+        result = cursor.fetchone()
+        total_follow_ups = result["total"]
+        compliant_follow_ups = result["compliant"] or 0  # Note: lowercase "compliant" as the alias in the SQL
+
+        if total_follow_ups > 0:
+            compliance_percentage = (compliant_follow_ups / total_follow_ups) * 100
+
+        # Calculate compliance percentage change
+        if comparison_start and comparison_end:
+            cursor.execute("""
+                SELECT COUNT(*) as total,
+                       SUM(CASE WHEN follow_up = 'COMPLIANT' THEN 1 ELSE 0 END) as compliant
+                FROM patient_visits 
+                WHERE visit_date BETWEEN ? AND ?
+            """, (comparison_start, comparison_end))
+
+            prev_result = cursor.fetchone()
+            prev_total = prev_result["total"]
+            prev_compliant = prev_result["compliant"] or 0  # Note: lowercase "compliant" as the alias
+
+            prev_percentage = (prev_compliant / prev_total) * 100 if prev_total > 0 else 0
+            if prev_percentage > 0:
+                compliance_change = compliance_percentage - prev_percentage
+            elif compliance_percentage > 0:
+                compliance_change = compliance_percentage  # Absolute change if previous was 0
 
     conn.close()
 
     return jsonify({
-        "total_patients": total_patients,
-        "total_visits": total_visits,
+        "total_patients": {
+            "count": total_patients,
+            "change_percentage": round(total_patients_change, 1) if total_patients_change is not None else None
+        },
+        "new_patients": {
+            "count": new_patients_count,
+            "change_percentage": round(new_patients_change, 1) if new_patients_change is not None else None
+        },
+        "total_visits": {
+            "count": visits_count,
+            "change_percentage": round(visits_change, 1) if visits_change is not None else None
+        },
+        "follow_up_compliance": {
+            "percentage": round(compliance_percentage, 1),
+            "change_percentage": round(compliance_change, 1) if compliance_change is not None else None
+        },
         "timeframe": {
             "start_date": start_date,
-            "end_date": end_date
-        },
-        "average_metrics": avg_metrics_dict,
-        "goals_summary": goals_summary
+            "end_date": end_date,
+            "comparison_start": comparison_start,
+            "comparison_end": comparison_end
+        }
     })
+
+
+@app.route("/dashboard/historical-trends", methods=["GET"])
+@handle_errors
+def get_historical_trends():
+    """
+    Get historical trends data for dashboard metrics:
+    - Patient growth
+    - New patient registrations
+    - Visit counts
+    - Follow-up compliance
+
+    Returns data suitable for sparkline visualization
+    """
+    # Get parameters
+    points = request.args.get('points', default=7, type=int)  # Number of data points to return
+    end_date = request.args.get('end_date')  # End date for the period
+
+    # Validate parameters
+    if points < 2 or points > 24:  # Reasonable limits
+        points = 7  # Default to 7 points
+
+    # If no end date provided, use today
+    if not end_date or not is_valid_date(end_date):
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    # Calculate time intervals based on points
+    # For 7 points or less, use weekly intervals
+    # For 8-14 points, use bi-weekly intervals
+    # For 15+ points, use monthly intervals
+    if points <= 7:
+        interval_days = 7  # Weekly
+    elif points <= 14:
+        interval_days = 14  # Bi-weekly
+    else:
+        interval_days = 30  # Monthly
+
+    # Calculate start date based on intervals
+    end_date_obj = datetime.strptime(end_date, "%Y-%m-%d")
+    start_date_obj = end_date_obj - timedelta(days=interval_days * (points - 1))
+    start_date = start_date_obj.strftime("%Y-%m-%d")
+
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    # Initialize results data structure
+    results = {
+        "total_patients": [],
+        "new_patients": [],
+        "visits": [],
+        "follow_up_compliance": [],
+        "date_labels": []
+    }
+
+    # Generate date points from start to end at our interval
+    date_points = []
+    current_date = start_date_obj
+    while current_date <= end_date_obj:
+        date_points.append(current_date.strftime("%Y-%m-%d"))
+        current_date += timedelta(days=interval_days)
+
+    # Add the date labels to results
+    results["date_labels"] = date_points
+
+    # For each date point, calculate the metrics
+    for i, date_point in enumerate(date_points):
+        # For start date calculations, use the first date point
+        period_start = start_date if i == 0 else date_points[i - 1]
+        period_end = date_point
+
+        # 1. Total patients as of this date
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM patients 
+            WHERE strftime('%Y-%m-%d', first_visit_date) <= ?
+        """, (period_end,))
+        total_patients = cursor.fetchone()["count"]
+        results["total_patients"].append(total_patients)
+
+        # 2. New patients in this period
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM patients 
+            WHERE strftime('%Y-%m-%d', first_visit_date) BETWEEN ? AND ?
+        """, (period_start, period_end))
+        new_patients = cursor.fetchone()["count"]
+        results["new_patients"].append(new_patients)
+
+        # 3. Visits in this period
+        cursor.execute("""
+            SELECT COUNT(*) as count FROM patient_visits 
+            WHERE visit_date BETWEEN ? AND ?
+        """, (period_start, period_end))
+        visits = cursor.fetchone()["count"]
+        results["visits"].append(visits)
+
+        # 4. Follow-up compliance
+        cursor.execute("""
+            SELECT COUNT(*) as total,
+                   SUM(CASE WHEN follow_up = 1 THEN 1 ELSE 0 END) as compliant
+            FROM patient_visits 
+            WHERE visit_date BETWEEN ? AND ?
+        """, (period_start, period_end))
+
+        result = cursor.fetchone()
+        total_follow_ups = result["total"]
+        compliant_follow_ups = result["compliant"] or 0  # Fixed the syntax error here
+
+        compliance_percentage = 0
+        if total_follow_ups > 0:
+            compliance_percentage = (compliant_follow_ups / total_follow_ups) * 100
+
+        results["follow_up_compliance"].append(round(compliance_percentage, 1))
+
+    conn.close()
+
+    return jsonify({
+        "trends": results,
+        "timeframe": {
+            "start_date": start_date,
+            "end_date": end_date,
+            "interval_days": interval_days,
+            "points": len(date_points)
+        }
+    })
+
+
+@app.route("/dashboard/recent-activity", methods=["GET"])
+@handle_errors
+def get_recent_activity():
+    """Get recent activity for the dashboard"""
+    limit = request.args.get('limit', default=5, type=int)
+    if limit < 1 or limit > 100:
+        limit = 5
+
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    all_activities = []
+
+    try:
+        # Check if direct activities are disabled
+        direct_activities_disabled = False
+        try:
+            cursor.execute("SELECT value FROM system_settings WHERE key = 'disable_direct_activities'")
+            result = cursor.fetchone()
+            if result and result[0] == 'true':
+                direct_activities_disabled = True
+                print("Direct activities are disabled")
+        except Exception as e:
+            print(f"Error checking direct_activities_disabled: {str(e)}")
+
+        # Check if activity_log table exists and get activities from it
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_log'")
+        if cursor.fetchone():
+            # Get activities from the activity log
+            cursor.execute("""
+                SELECT activity_type, entity_type, entity_id, entity_name, 
+                       datetime(timestamp) as date, additional_info, id
+                FROM activity_log
+                ORDER BY id DESC
+                LIMIT ?
+            """, (limit,))
+
+            activities = cursor.fetchall()
+            for activity in activities:
+                activity_dict = dict(activity)
+
+                # Format description based on activity type
+                if activity_dict["activity_type"] == "create":
+                    if activity_dict["entity_type"] == "patient":
+                        description = f"New patient registered: {activity_dict['entity_name']}"
+                    elif activity_dict["entity_type"] == "visit":
+                        description = f"New visit for: {activity_dict['entity_name']}"
+                    else:
+                        description = f"Created {activity_dict['entity_type']} for: {activity_dict['entity_name']}"
+
+                elif activity_dict["activity_type"] == "update":
+                    description = f"Updated {activity_dict['entity_type']}: {activity_dict['entity_name']}"
+
+                elif activity_dict["activity_type"] == "delete":
+                    description = f"Deleted {activity_dict['entity_type']}: {activity_dict['entity_name']}"
+                    if activity_dict.get("additional_info"):
+                        description += f" ({activity_dict['additional_info']})"
+
+                else:  # For any other activity types
+                    description = f"{activity_dict['activity_type'].capitalize()} {activity_dict['entity_type']}: {activity_dict['entity_name']}"
+
+                # Format date and time
+                date_parts = activity_dict["date"].split(" ")
+                date = date_parts[0]
+                time = date_parts[1] if len(date_parts) > 1 else None
+
+                all_activities.append({
+                    "type": activity_dict["activity_type"],
+                    "entity_type": activity_dict["entity_type"],
+                    "patient_name": activity_dict["entity_name"],
+                    "client_id": activity_dict["entity_id"] if activity_dict["entity_type"] == "patient" else None,
+                    "date": date,
+                    "time": time,
+                    "description": description,
+                    "sort_id": int(activity_dict["id"])
+                })
+
+        # If direct activities are not disabled, get activities from other tables
+        if not direct_activities_disabled:
+            # 1. Get recent new patients
+            cursor.execute("""
+                SELECT 'create' as activity_type, first_name || ' ' || last_name as name, 
+                       first_visit_date as date, client_id, rowid
+                FROM patients
+                ORDER BY rowid DESC
+                LIMIT ?
+            """, (limit,))
+
+            new_patients = cursor.fetchall()
+            for patient in new_patients:
+                patient_dict = dict(patient)
+                all_activities.append({
+                    "type": "create",
+                    "entity_type": "patient",
+                    "patient_name": patient_dict["name"],
+                    "client_id": patient_dict["client_id"],
+                    "date": patient_dict["date"],
+                    "description": f"New patient registered: {patient_dict['name']}",
+                    "sort_id": int(patient_dict["rowid"])
+                })
+
+            # Similar logic for visits and goals...
+
+        # Sort all activities by sort_id in descending order (newest first)
+        all_activities.sort(key=lambda x: x.get("sort_id", 0), reverse=True)
+
+        # Remove sort_id before returning to client
+        for activity in all_activities:
+            if "sort_id" in activity:
+                del activity["sort_id"]
+
+        # Limit to the requested number
+        all_activities = all_activities[:limit]
+
+        # Debug: Print what activities we're returning
+        print(f"Returning {len(all_activities)} activities:", all_activities)
+
+    except Exception as e:
+        print(f"Error in get_recent_activity: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise e
+    finally:
+        conn.close()
+
+    return jsonify({
+        "activities": all_activities
+    })
+
+@app.route("/dashboard/clear-activities", methods=["POST"])
+@handle_errors
+def clear_activities():
+    """Clear all activity sources completely"""
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("BEGIN TRANSACTION")
+
+        # 1. Clear the activity_log table if it exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='activity_log'")
+        if cursor.fetchone():
+            cursor.execute("DELETE FROM activity_log")
+            print("Cleared activity_log table")
+
+        # 2. Create or update a setting that disables showing direct table activities
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='system_settings'")
+        if not cursor.fetchone():
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            ''')
+
+        # Set a flag to indicate that direct activities should be ignored
+        current_time = datetime.now().isoformat()
+        cursor.execute('''
+        INSERT INTO system_settings (key, value, updated_at)
+        VALUES ('disable_direct_activities', 'true', ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at
+        ''', (current_time,))
+
+        cursor.execute("COMMIT")
+
+        return jsonify({"message": "All activities successfully cleared"})
+    except Exception as e:
+        cursor.execute("ROLLBACK")
+        print(f"Error clearing activities: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to clear activities: {str(e)}"}), 500
+    finally:
+        conn.close()
+# ----- Helper functions -----
+
+def is_valid_date(date_str):
+    """Validate if a string is in YYYY-MM-DD format"""
+    try:
+        datetime.strptime(date_str, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def calculate_patient_growth(cursor, start_date, end_date, comparison_start, comparison_end):
+    """Calculate percentage growth in patient count"""
+    # If no date range specified, calculate overall growth (comparing to last month)
+    if not start_date or not end_date:
+        # Get current total
+        cursor.execute("SELECT COUNT(*) as current_count FROM patients")
+        current_count = cursor.fetchone()["current_count"]
+
+        # Get count from one month ago
+        one_month_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+        cursor.execute("""
+            SELECT COUNT(*) as previous_count FROM patients 
+            WHERE first_visit_date < ?
+        """, (one_month_ago,))
+
+        previous_count = cursor.fetchone()["previous_count"]
+
+        if previous_count > 0:
+            return ((current_count - previous_count) / previous_count) * 100
+        return None
+
+    # If comparison period not provided, we can't calculate growth
+    if not comparison_start or not comparison_end:
+        return None
+
+    # Get patient count as of the end date
+    cursor.execute("""
+        SELECT COUNT(*) as current_count FROM patients 
+        WHERE strftime('%Y-%m-%d', first_visit_date) <= ?
+    """, (end_date,))
+
+    current_count = cursor.fetchone()["current_count"]
+
+    # Get patient count as of the end of the comparison period
+    cursor.execute("""
+        SELECT COUNT(*) as previous_count FROM patients 
+        WHERE strftime('%Y-%m-%d', first_visit_date) <= ?
+    """, (comparison_end,))
+
+    previous_count = cursor.fetchone()["previous_count"]
+
+    if previous_count > 0:
+        return ((current_count - previous_count) / previous_count) * 100
+    elif current_count > 0:
+        return 100  # If previous was 0 and current is not, that's a 100% increase
+
+    return 0
+
 
 
 # --------- SERVE REACT STATIC FILES (AFTER BUILD) ---------
@@ -1312,7 +1890,7 @@ def serve(path):
     # Skip API routes
     if path.startswith('/'):
         return jsonify({"error": "Not found"}), 404
-        
+
     if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
         return send_from_directory(app.static_folder, path)
     else:
