@@ -1,12 +1,10 @@
-import React from 'react';
-import { PaletteIcon } from 'lucide-react';
-import { useTheme } from '../ThemeContext';
+import React from "react";
+import { PaletteIcon } from "lucide-react";
+import { useTheme } from "../ThemeContext";
 const Settings = () => {
-  const {
-    theme,
-    toggleTheme
-  } = useTheme();
-  return <div className="space-y-6">
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-200">
         Settings
       </h1>
@@ -38,17 +36,26 @@ const Settings = () => {
               </div>
               <label className="flex items-center cursor-pointer">
                 <div className="relative">
-                  <input type="checkbox" className="sr-only" checked={theme === 'dark'} onChange={toggleTheme} />
+                  <input
+                    type="checkbox"
+                    className="sr-only"
+                    checked={theme === "dark"}
+                    onChange={toggleTheme}
+                  />
                   <div className="w-14 h-7 bg-gray-200 dark:bg-gray-700 rounded-full"></div>
-                  <div className={`absolute w-7 h-7 rounded-full shadow transition-transform ${theme === 'dark' ? 'transform translate-x-7 bg-blue-600' : 'bg-white'}`} style={{
-                  top: '0'
-                }}></div>
+                  <div
+                    className={`absolute w-7 h-7 rounded-full shadow transition-transform ${theme === "dark" ? "transform translate-x-7 bg-blue-600" : "bg-white"}`}
+                    style={{
+                      top: "0",
+                    }}
+                  ></div>
                 </div>
               </label>
             </div>
           </div>
         </div>
       </div>
-    </div>;
+    </div>
+  );
 };
 export default Settings;

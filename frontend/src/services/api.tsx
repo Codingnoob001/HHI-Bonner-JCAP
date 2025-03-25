@@ -1,14 +1,14 @@
 // API base URL configuration
-const API_BASE_URL = 'http://127.0.0.1:5000';
+const API_BASE_URL = "http://127.0.0.1:5000";
 
 // Reusable fetch function with error handling
 export const fetchApi = async (endpoint: string, options: RequestInit = {}) => {
   const url = `${API_BASE_URL}${endpoint}`;
-  
+
   const response = await fetch(url, {
     ...options,
     headers: {
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
       ...options.headers,
     },
   });
@@ -33,88 +33,114 @@ export const patientApi = {
   getPatients: (page = 1, limit = 100) => {
     return fetchApi(`/patients?page=${page}&limit=${limit}`);
   },
-  
+  // Add to patientApi in api.tsx
+  getPatientGoalsHistory: (clientId: string) => {
+    return fetchApi(`/patients/${clientId}/goals-history`);
+  },
+  // In api.tsx, add this to the patientApi object if it doesn't exist already:
+  getPatientGoals: (clientId: string) => {
+    return fetchApi(`/patients/${clientId}/goals`);
+  },
+
   // Get single patient by client_id
   getPatientById: (clientId: string) => {
     return fetchApi(`/patients/${clientId}`);
   },
-  
+
   // Create new patient
   createPatient: (patientData: any) => {
-    return fetchApi('/patients', {
-      method: 'POST',
-      body: JSON.stringify(patientData)
-    });
-  },
-  
-  // Update patient
-  updatePatient: (clientId: string, patientData: any) => {
-    return fetchApi(`/patients/${clientId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(patientData)
-    });
-  },
-  
-  // Delete patient
-  deletePatient: (clientId: string) => {
-    return fetchApi(`/patients/${clientId}`, {
-      method: 'DELETE'
-    });
-  },
-  
-  // Add patient visit
-  addPatientVisit: (clientId: string, visitData: any) => {
-    return fetchApi(`/patients/${clientId}/visits`, {
-      method: 'POST',
-      body: JSON.stringify(visitData)
+    return fetchApi("/patients", {
+      method: "POST",
+      body: JSON.stringify(patientData),
     });
   },
 
-searchPatients: (query: string) => {
-  return fetchApi(`/patients/search?query=${encodeURIComponent(query)}`);
-},
-  
+  // Update patient
+  updatePatient: (clientId: string, patientData: any) => {
+    console.log("API updatePatient called with data:", patientData);
+
+    // Create a copy of the data to avoid modifying the original
+    const data = { ...patientData };
+
+    // Check if goals data exists and process it if needed
+    if (data.goals) {
+      // If goals are in an object format, keep it as is - the backend expects this format
+      console.log("Goals data included in update request:", data.goals);
+    }
+
+    return fetchApi(`/patients/${clientId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    })
+      .then((response) => {
+        console.log("Update patient response:", response);
+        return response;
+      })
+      .catch((error) => {
+        console.error("Error in updatePatient API call:", error);
+        throw error;
+      });
+  },
+
+  // Delete patient
+  deletePatient: (clientId: string) => {
+    return fetchApi(`/patients/${clientId}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Add patient visit
+  addPatientVisit: (clientId: string, visitData: any) => {
+    return fetchApi(`/patients/${clientId}/visits`, {
+      method: "POST",
+      body: JSON.stringify(visitData),
+    });
+  },
+
+  searchPatients: (query: string) => {
+    return fetchApi(`/patients/search?query=${encodeURIComponent(query)}`);
+  },
+
   // Get patient visits
   getPatientVisits: (clientId: string) => {
     return fetchApi(`/patients/${clientId}/visits`);
-  }
+  },
 };
 
 // Dashboard-specific API endpoints
 export const dashboardApi = {
   // Get dashboard metrics (stats cards)
   getMetrics: (startDate?: string, endDate?: string) => {
-    let url = '/dashboard/metrics';
-    
+    let url = "/dashboard/metrics";
+
     // Add date parameters if provided
     if (startDate && endDate) {
       url += `?start_date=${startDate}&end_date=${endDate}`;
     }
-    
+
     return fetchApi(url);
   },
-  
+
   getRecentActivity: (limit = 5) => {
     // Add cache-busting parameter to prevent caching
     const timestamp = new Date().getTime();
     return fetchApi(`/dashboard/recent-activity?limit=${limit}&_=${timestamp}`);
   },
-  
+
   clearRecentActivity: () => {
-    return fetchApi('/dashboard/clear-activities', {
-      method: 'POST'
+    return fetchApi("/dashboard/clear-activities", {
+      method: "POST",
     });
   },
 
   getHistoricalTrends: (points = 7, endDate?: string) => {
     let url = `/dashboard/historical-trends?points=${points}`;
-    
+
     // Add end date if provided
     if (endDate) {
       url += `&end_date=${endDate}`;
     }
-    
-    return fetchApi(url);
-  }
-};
 
+    return fetchApi(url);
+  },
+};

@@ -1,12 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { EditIcon, ArrowLeftIcon, PlusIcon } from 'lucide-react';
-import NewVisitForm from './NewVisitForm';
-import EditPatientForm from './EditPatientForm';
-import VisitDetailsModal from './VisitDetailsModal';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import Toast from '../Toast';
-import { patientApi } from '../../services/api';
+import React, { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { EditIcon, ArrowLeftIcon, PlusIcon } from "lucide-react";
+import NewVisitForm from "./NewVisitForm";
+import EditPatientForm from "./EditPatientForm";
+import VisitDetailsModal from "./VisitDetailsModal";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
+import Toast from "../Toast";
+import { patientApi } from "../../services/api";
 
 interface Patient {
   client_id: string;
@@ -76,127 +85,121 @@ interface PatientDetailData {
 const PatientDetail = () => {
   const navigate = useNavigate();
   const { clientId } = useParams<{ clientId: string }>();
-  
+
   const [isNewVisitFormOpen, setIsNewVisitFormOpen] = useState(false);
   const [isEditFormOpen, setIsEditFormOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<{
     message: string;
-    type: 'success' | 'error';
+    type: "success" | "error";
   } | null>(null);
   const [isVisitDetailsOpen, setIsVisitDetailsOpen] = useState(false);
   const [selectedVisit, setSelectedVisit] = useState<Visit | null>(null);
-  
-  const [patientData, setPatientData] = useState<PatientDetailData | null>(null);
+
+  const [patientData, setPatientData] = useState<PatientDetailData | null>(
+    null,
+  );
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch patient data from API
-  useEffect(() => {
-    const fetchPatientData = async () => {
-      if (!clientId) return;
-      
-      try {
-        setLoading(true);
-        const data = await patientApi.getPatientById(clientId);
-        setPatientData(data);
-        setError(null);
-      } catch (err) {
-        console.error('Failed to fetch patient data:', err);
-        setError(err instanceof Error ? err.message : 'Failed to load patient data. Please try again later.');
-      } finally {
-        setLoading(false);
-      }
-    };
+  // Add this function after the state declarations
+  const refreshPatientData = async () => {
+    if (!clientId) return;
 
-    fetchPatientData();
+    try {
+      setLoading(true);
+      const data = await patientApi.getPatientById(clientId);
+      setPatientData(data);
+      setError(null);
+    } catch (err) {
+      console.error("Failed to fetch patient data:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to load patient data. Please try again later.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refreshPatientData();
   }, [clientId]);
 
+  // Replace the existing handleNewVisit function with this
   const handleNewVisit = async (data: any) => {
     if (!clientId) return;
-    
+
     try {
-      console.log('Visit added:', data);
-      
+      console.log("Visit added:", data);
+
       setIsNewVisitFormOpen(false);
-      
+
       setToastMessage({
-        message: 'Visit added successfully',
-        type: 'success'
+        message: "Visit added successfully",
+        type: "success",
       });
-      
-      setLoading(true);
-      
-      try {
-        const updatedData = await patientApi.getPatientById(clientId);
-        console.log('Refreshed patient data:', updatedData);
-        
-        setPatientData(updatedData);
-      } catch (fetchErr) {
-        console.error('Error fetching updated patient data:', fetchErr);
-      } finally {
-        setLoading(false);
-      }
+
+      // Replace the existing loading and fetching code with this line
+      await refreshPatientData();
     } catch (err) {
-      console.error('Error adding visit:', err);
+      console.error("Error adding visit:", err);
       setToastMessage({
-        message: err instanceof Error ? err.message : 'Failed to add visit',
-        type: 'error'
+        message: err instanceof Error ? err.message : "Failed to add visit",
+        type: "error",
       });
     }
   };
 
   const handleEditPatient = async (data: any) => {
     if (!clientId) return;
-    
+
     try {
-      // Add debugging to see what's being sent to the API
-      console.log('Submitting patient update data:', data);
-      
-      // Call the API to update the patient
-      await patientApi.updatePatient(clientId, data);
-      
+      console.log("Submitting patient update data:", data);
+
+      // Make sure any goals data is properly formatted for the API
+      let requestData = { ...data };
+
+      // If there are goals in the data, they should be prepared in the right format
+      if (data.goals) {
+        console.log("Including goals data in update:", data.goals);
+      }
+
+      // Send update to the API
+      await patientApi.updatePatient(clientId, requestData);
+      await refreshPatientData();
+
       // Close the form
       setIsEditFormOpen(false);
-      
+
       // Show success message
       setToastMessage({
-        message: 'Patient updated successfully',
-        type: 'success'
+        message: "Patient updated successfully",
+        type: "success",
       });
-      
-      // Force a data refetch to see the changes
-      setLoading(true);
-      
-      try {
-        // Fetch the updated patient data
-        const updatedData = await patientApi.getPatientById(clientId);
-        console.log('Refreshed patient data:', updatedData);
-        
-        // Update the state with the new data
-        setPatientData(updatedData);
-      } catch (fetchErr) {
-        console.error('Error fetching updated patient data:', fetchErr);
-        // Still show success for the update operation
-      } finally {
-        setLoading(false);
-      }
+
+      // Refresh patient data with the latest information from the server
+      await refreshPatientData();
+
+      console.log("Patient data refreshed after update");
     } catch (err) {
-      console.error('Error updating patient:', err);
+      console.error("Error updating patient:", err);
       setToastMessage({
-        message: err instanceof Error ? err.message : 'Failed to update patient',
-        type: 'error'
+        message:
+          err instanceof Error ? err.message : "Failed to update patient",
+        type: "error",
       });
     }
   };
 
   const formatChartData = () => {
     if (!patientData || !patientData.trend) return [];
-    
-    return patientData.trend.map(visit => {
+
+    return patientData.trend.map((visit) => {
       return {
-        date: new Date(visit.visit_date).toLocaleDateString('en-US', {
-          month: 'short',
-          day: 'numeric'
+        date: new Date(visit.visit_date).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
         }),
         systolic: visit.systolic,
         diastolic: visit.diastolic,
@@ -204,7 +207,7 @@ const PatientDetail = () => {
         bmi: visit.bmi,
         glucose: visit.glucose,
         cholesterol: visit.cholesterol,
-        a1c: visit.a1c
+        a1c: visit.a1c,
       };
     });
   };
@@ -214,71 +217,91 @@ const PatientDetail = () => {
   const handleViewVisitDetails = async (visit: any) => {
     // Make sure clientId exists
     if (!clientId) {
-      console.error('clientId is undefined');
+      console.error("clientId is undefined");
       setSelectedVisit(visit);
       setIsVisitDetailsOpen(true);
       return;
     }
-  
+
     try {
       // Now TypeScript knows clientId is not undefined
       const allVisits = await patientApi.getPatientVisits(clientId);
-      
+
       // Find the full visit data
       const fullVisitData = allVisits.find((v: any) => v.id === visit.id);
-      
+
+      // Fetch goals for this specific visit date
+      const goalsResponse = await patientApi.getPatientGoals(clientId);
+      const visitGoals = goalsResponse.find(
+        (g: any) => g.visit_date === visit.visit_date,
+      );
+
+      // Combine visit data with goals
       if (fullVisitData) {
+        fullVisitData.goals = visitGoals || null;
         setSelectedVisit(fullVisitData);
       } else {
-        setSelectedVisit(visit);
+        // If we can't find full visit data, still add goals to the visit we have
+        const visitWithGoals = {
+          ...visit,
+          goals: visitGoals || null,
+        };
+        setSelectedVisit(visitWithGoals);
       }
-      
+
       setIsVisitDetailsOpen(true);
     } catch (err) {
-      console.error('Error fetching full visit details:', err);
+      console.error("Error fetching full visit details:", err);
       setSelectedVisit(visit);
       setIsVisitDetailsOpen(true);
     }
   };
-
-  // Display active goals from latest_goals
   const getActiveGoals = () => {
     if (!patientData || !patientData.latest_goals) return [];
-    
+
+    console.log("Processing latest goals:", patientData.latest_goals);
+
     const goals = [];
     const goalsMapping: Record<string, string> = {
-      increased_fruit_veg: 'Increase Fruit & Vegetable Intake',
-      increased_water: 'Increase Water Intake',
-      increased_exercise: 'Increase Physical Activity',
-      cut_tv_viewing: 'Reduce Screen Time',
-      eat_breakfast: 'Eat Breakfast Daily',
-      limit_alcohol: 'Limit Alcohol Consumption',
-      no_late_eating: 'Avoid Late Night Eating',
-      more_whole_grains: 'Eat More Whole Grains',
-      less_fried_foods: 'Reduce Fried Food Consumption',
-      low_fat_milk: 'Use Low-Fat Dairy Products',
-      lower_salt: 'Reduce Salt Intake',
-      annual_checkup: 'Schedule Annual Check-up',
-      quit_smoking: 'Quit Smoking'
+      increased_fruit_veg: "Increase Fruit & Vegetable Intake",
+      increased_water: "Increase Water Intake",
+      increased_exercise: "Increase Physical Activity",
+      cut_tv_viewing: "Reduce Screen Time",
+      eat_breakfast: "Eat Breakfast Daily",
+      limit_alcohol: "Limit Alcohol Consumption",
+      no_late_eating: "Avoid Late Night Eating",
+      more_whole_grains: "Eat More Whole Grains",
+      less_fried_foods: "Reduce Fried Food Consumption",
+      low_fat_milk: "Use Low-Fat Dairy Products",
+      lower_salt: "Reduce Salt Intake",
+      annual_checkup: "Schedule Annual Check-up",
+      quit_smoking: "Quit Smoking",
     };
 
     for (const [key, value] of Object.entries(patientData.latest_goals)) {
-      if (key !== 'client_id' && key !== 'visit_date' && value === 1 && goalsMapping[key]) {
+      if (
+        key !== "client_id" &&
+        key !== "visit_date" &&
+        key !== "visit_id" &&
+        value === 1 &&
+        goalsMapping[key]
+      ) {
         goals.push(goalsMapping[key]);
       }
     }
-    
+
+    console.log("Extracted active goals:", goals);
     return goals;
   };
 
   const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'N/A';
+    if (!dateStr) return "N/A";
     try {
       const date = new Date(dateStr);
-      return date.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric'
+      return date.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
       });
     } catch (e) {
       return dateStr;
@@ -296,9 +319,11 @@ const PatientDetail = () => {
   if (error || !patientData) {
     return (
       <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded p-4 m-4">
-        <p className="text-red-700 dark:text-red-400">{error || 'Failed to load patient data'}</p>
-        <button 
-          onClick={() => navigate(-1)} 
+        <p className="text-red-700 dark:text-red-400">
+          {error || "Failed to load patient data"}
+        </p>
+        <button
+          onClick={() => navigate(-1)}
           className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"
         >
           Go Back
@@ -310,34 +335,60 @@ const PatientDetail = () => {
   const patient = patientData.patient_info;
   const fullName = `${patient.first_name} ${patient.last_name}`;
   const activeGoals = getActiveGoals();
+  const sortedVisits = [...patientData.trend].sort((a, b) => {
+    return new Date(b.visit_date).getTime() - new Date(a.visit_date).getTime();
+  });
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center">
-          <button onClick={() => navigate(-1)} className="mr-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700">
-            <ArrowLeftIcon size={20} className="text-gray-500 dark:text-gray-400" />
+          <button
+            onClick={() => navigate(-1)}
+            className="mr-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+          >
+            <ArrowLeftIcon
+              size={20}
+              className="text-gray-500 dark:text-gray-400"
+            />
           </button>
           <h1 className="text-2xl font-semibold text-gray-800 dark:text-gray-200">
             Patient Details
           </h1>
         </div>
         <div className="flex space-x-3">
-          <button onClick={() => setIsNewVisitFormOpen(true)} className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center">
+          <button
+            onClick={() => setIsNewVisitFormOpen(true)}
+            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center"
+          >
             <PlusIcon size={16} className="mr-1" /> New Visit
           </button>
           <button className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center">
             Print
           </button>
-          <button onClick={() => setIsEditFormOpen(true)} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center">
+          <button
+            onClick={() => setIsEditFormOpen(true)}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 flex items-center"
+          >
             <EditIcon size={16} className="mr-1" /> Edit Patient
           </button>
         </div>
       </div>
-      <EditPatientForm isOpen={isEditFormOpen} onClose={() => setIsEditFormOpen(false)} onSubmit={handleEditPatient} patient={patient} latestGoals={patientData.latest_goals}
-/>
-      <NewVisitForm isOpen={isNewVisitFormOpen} onClose={() => setIsNewVisitFormOpen(false)} onSubmit={handleNewVisit} clientId={patient.client_id} latestGoals={patientData.latest_goals}/>
-      
+      <EditPatientForm
+        isOpen={isEditFormOpen}
+        onClose={() => setIsEditFormOpen(false)}
+        onSubmit={handleEditPatient}
+        patient={patient}
+        latestGoals={patientData.latest_goals}
+      />
+      <NewVisitForm
+        isOpen={isNewVisitFormOpen}
+        onClose={() => setIsNewVisitFormOpen(false)}
+        onSubmit={handleNewVisit}
+        clientId={patient.client_id}
+        latestGoals={patientData.latest_goals}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
@@ -370,15 +421,13 @@ const PatientDetail = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     Date of Birth
                   </p>
-                  <p className="font-medium">
-                    {formatDate(patient.birthdate)}
-                  </p>
+                  <p className="font-medium">{formatDate(patient.birthdate)}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     Phone
                   </p>
-                  <p className="font-medium">{patient.phone || 'N/A'}</p>
+                  <p className="font-medium">{patient.phone || "N/A"}</p>
                 </div>
                 {patient.race && (
                   <div>
@@ -424,231 +473,311 @@ const PatientDetail = () => {
                   <p className="text-sm text-gray-500 dark:text-gray-400">
                     First Visit Date
                   </p>
-                  <p className="font-medium">{formatDate(patient.first_visit_date)}</p>
+                  <p className="font-medium">
+                    {formatDate(patient.first_visit_date)}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
 
-{patientData.latest_changes && (
-  <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 mt-6">
-    <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200 mb-4">
-      Recent Changes
-    </h3>
-    <div className="grid grid-cols-2 gap-4">
-      {patientData.latest_changes.systolic_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Systolic Blood Pressure
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.systolic_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.systolic_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.systolic_change} mmHg
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.diastolic_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Diastolic Blood Pressure
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.diastolic_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.diastolic_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.diastolic_change} mmHg
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.cholesterol_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Cholesterol
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.cholesterol_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.cholesterol_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.cholesterol_change} mg/dL
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.glucose_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Blood Glucose
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.glucose_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.glucose_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.glucose_change} mg/dL
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.weight_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            Weight
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.weight_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.weight_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.weight_change} lbs
-            {patientData.latest_changes.weight_percentage_change && (
-              <span className="ml-1 text-xs">
-                ({patientData.latest_changes.weight_percentage_change})
-              </span>
-            )}
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.bmi_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            BMI
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.bmi_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.bmi_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.bmi_change}
-          </p>
-        </div>
-      )}
-      
-      {patientData.latest_changes.a1c_change && (
-        <div>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            A1C
-          </p>
-          <p className={`font-medium ${
-            patientData.latest_changes.a1c_change.startsWith('+') 
-              ? 'text-red-600 dark:text-red-400' 
-              : patientData.latest_changes.a1c_change.startsWith('-')
-                ? 'text-green-600 dark:text-green-400'
-                : 'text-gray-900 dark:text-gray-100'
-          }`}>
-            {patientData.latest_changes.a1c_change}%
-          </p>
-        </div>
-      )}
-    </div>
-    
-    {patientData.trend.length > 0 && (
-      <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
-          Latest Metrics (as of {formatDate(patientData.trend[patientData.trend.length - 1]?.visit_date)})
-        </p>
-        <div className="grid grid-cols-2 gap-4">
-          {patientData.trend[patientData.trend.length - 1]?.systolic && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Blood Pressure
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.systolic}/
-                {patientData.trend[patientData.trend.length - 1]?.diastolic} mmHg
-              </p>
+          {patientData.latest_changes && (
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 mt-6">
+              <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200 mb-4">
+                Recent Changes
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
+                {patientData.latest_changes.systolic_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Systolic Blood Pressure
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.systolic_change.startsWith(
+                          "+",
+                        )
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.systolic_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.systolic_change} mmHg
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.diastolic_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Diastolic Blood Pressure
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.diastolic_change.startsWith(
+                          "+",
+                        )
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.diastolic_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.diastolic_change} mmHg
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.cholesterol_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Cholesterol
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.cholesterol_change.startsWith(
+                          "+",
+                        )
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.cholesterol_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.cholesterol_change} mg/dL
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.glucose_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Blood Glucose
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.glucose_change.startsWith(
+                          "+",
+                        )
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.glucose_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.glucose_change} mg/dL
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.weight_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      Weight
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.weight_change.startsWith("+")
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.weight_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.weight_change} lbs
+                      {patientData.latest_changes.weight_percentage_change && (
+                        <span className="ml-1 text-xs">
+                          ({patientData.latest_changes.weight_percentage_change}
+                          )
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.bmi_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      BMI
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.bmi_change.startsWith("+")
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.bmi_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.bmi_change}
+                    </p>
+                  </div>
+                )}
+
+                {patientData.latest_changes.a1c_change && (
+                  <div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      A1C
+                    </p>
+                    <p
+                      className={`font-medium ${
+                        patientData.latest_changes.a1c_change.startsWith("+")
+                          ? "text-red-600 dark:text-red-400"
+                          : patientData.latest_changes.a1c_change.startsWith(
+                                "-",
+                              )
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-gray-900 dark:text-gray-100"
+                      }`}
+                    >
+                      {patientData.latest_changes.a1c_change}%
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {patientData.trend.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                    Latest Metrics (as of{" "}
+                    {formatDate(
+                      patientData.trend[patientData.trend.length - 1]
+                        ?.visit_date,
+                    )}
+                    )
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {patientData.trend[patientData.trend.length - 1]
+                      ?.systolic && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          Blood Pressure
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {
+                            patientData.trend[patientData.trend.length - 1]
+                              ?.systolic
+                          }
+                          /
+                          {
+                            patientData.trend[patientData.trend.length - 1]
+                              ?.diastolic
+                          }{" "}
+                          mmHg
+                        </p>
+                      </div>
+                    )}
+
+                    {patientData.trend[patientData.trend.length - 1]
+                      ?.cholesterol && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          Cholesterol
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {
+                            patientData.trend[patientData.trend.length - 1]
+                              ?.cholesterol
+                          }{" "}
+                          mg/dL
+                        </p>
+                      </div>
+                    )}
+
+                    {patientData.trend[patientData.trend.length - 1]
+                      ?.glucose && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          Blood Glucose
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {
+                            patientData.trend[patientData.trend.length - 1]
+                              ?.glucose
+                          }{" "}
+                          mg/dL
+                        </p>
+                      </div>
+                    )}
+
+                    {patientData.trend[patientData.trend.length - 1]
+                      ?.weight && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          Weight
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {
+                            patientData.trend[patientData.trend.length - 1]
+                              ?.weight
+                          }{" "}
+                          lbs
+                        </p>
+                      </div>
+                    )}
+
+                    {patientData.trend[patientData.trend.length - 1]?.bmi && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          BMI
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {patientData.trend[
+                            patientData.trend.length - 1
+                          ]?.bmi.toFixed(1)}
+                        </p>
+                      </div>
+                    )}
+
+                    {patientData.trend[patientData.trend.length - 1]?.a1c && (
+                      <div>
+                        <p className="text-sm text-gray-500 dark:text-gray-400">
+                          A1C
+                        </p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">
+                          {patientData.trend[patientData.trend.length - 1]?.a1c}
+                          %
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-          
-          {patientData.trend[patientData.trend.length - 1]?.cholesterol && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Cholesterol
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.cholesterol} mg/dL
-              </p>
-            </div>
-          )}
-          
-          {patientData.trend[patientData.trend.length - 1]?.glucose && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Blood Glucose
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.glucose} mg/dL
-              </p>
-            </div>
-          )}
-          
-          {patientData.trend[patientData.trend.length - 1]?.weight && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Weight
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.weight} kg
-              </p>
-            </div>
-          )}
-          
-          {patientData.trend[patientData.trend.length - 1]?.bmi && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                BMI
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.bmi.toFixed(1)}
-              </p>
-            </div>
-          )}
-          
-          {patientData.trend[patientData.trend.length - 1]?.a1c && (
-            <div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                A1C
-              </p>
-              <p className="font-medium text-gray-900 dark:text-gray-100">
-                {patientData.trend[patientData.trend.length - 1]?.a1c}%
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-    )}
-  </div>
-)}
-          
+
           {activeGoals.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 mt-6">
               <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200 mb-4">
                 Health Goals
               </h3>
               <div className="space-y-3">
-                {activeGoals.map(goal => (
+                {activeGoals.map((goal) => (
                   <div key={goal} className="flex items-start space-x-3">
-                    <input type="checkbox" id={goal} checked className="mt-1" disabled />
-                    <label htmlFor={goal} className="text-sm text-gray-700 dark:text-gray-300">
+                    <input
+                      type="checkbox"
+                      id={goal}
+                      checked
+                      className="mt-1"
+                      disabled
+                    />
+                    <label
+                      htmlFor={goal}
+                      className="text-sm text-gray-700 dark:text-gray-300"
+                    >
                       {goal}
                     </label>
                   </div>
@@ -657,7 +786,7 @@ const PatientDetail = () => {
             </div>
           )}
         </div>
-        
+
         <div className="lg:col-span-2">
           {patientData.trend.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6 mb-6">
@@ -666,7 +795,7 @@ const PatientDetail = () => {
               </h3>
               <div className="space-y-6">
                 {/* Blood Pressure Chart */}
-                {chartData.some(data => data.systolic && data.diastolic) && (
+                {chartData.some((data) => data.systolic && data.diastolic) && (
                   <div>
                     <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
                       Blood Pressure
@@ -679,16 +808,26 @@ const PatientDetail = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="systolic" stroke="#3b82f6" name="Systolic" />
-                          <Line type="monotone" dataKey="diastolic" stroke="#ef4444" name="Diastolic" />
+                          <Line
+                            type="monotone"
+                            dataKey="systolic"
+                            stroke="#3b82f6"
+                            name="Systolic"
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey="diastolic"
+                            stroke="#ef4444"
+                            name="Diastolic"
+                          />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
-                
+
                 {/* Weight Chart */}
-                {chartData.some(data => data.weight) && (
+                {chartData.some((data) => data.weight) && (
                   <div>
                     <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
                       Weight
@@ -701,15 +840,20 @@ const PatientDetail = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="weight" stroke="#10b981" name="Weight" />
+                          <Line
+                            type="monotone"
+                            dataKey="weight"
+                            stroke="#10b981"
+                            name="Weight"
+                          />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
-                
+
                 {/* Glucose Chart */}
-                {chartData.some(data => data.glucose) && (
+                {chartData.some((data) => data.glucose) && (
                   <div>
                     <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
                       Blood Glucose
@@ -722,15 +866,45 @@ const PatientDetail = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="glucose" stroke="#f59e0b" name="Glucose" />
+                          <Line
+                            type="monotone"
+                            dataKey="glucose"
+                            stroke="#f59e0b"
+                            name="Glucose"
+                          />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
-                
+                {/* BMI Chart */}
+                {chartData.some((data) => data.bmi) && (
+                  <div>
+                    <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
+                      BMI
+                    </h4>
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="date" />
+                          <YAxis />
+                          <Tooltip />
+                          <Legend />
+                          <Line
+                            type="monotone"
+                            dataKey="bmi"
+                            stroke="#6366f1"
+                            name="BMI"
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                )}
+
                 {/* Cholesterol Chart */}
-                {chartData.some(data => data.cholesterol) && (
+                {chartData.some((data) => data.cholesterol) && (
                   <div>
                     <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
                       Cholesterol
@@ -743,15 +917,20 @@ const PatientDetail = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="cholesterol" stroke="#8b5cf6" name="Cholesterol" />
+                          <Line
+                            type="monotone"
+                            dataKey="cholesterol"
+                            stroke="#8b5cf6"
+                            name="Cholesterol"
+                          />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
                   </div>
                 )}
-                
+
                 {/* A1C Chart */}
-                {chartData.some(data => data.a1c) && (
+                {chartData.some((data) => data.a1c) && (
                   <div>
                     <h4 className="text-md font-medium text-gray-700 dark:text-gray-400 mb-2">
                       A1C
@@ -764,7 +943,12 @@ const PatientDetail = () => {
                           <YAxis />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="a1c" stroke="#ec4899" name="A1C" />
+                          <Line
+                            type="monotone"
+                            dataKey="a1c"
+                            stroke="#ec4899"
+                            name="A1C"
+                          />
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -773,14 +957,15 @@ const PatientDetail = () => {
               </div>
             </div>
           )}
-          
+
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm p-6">
             <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200 mb-4">
               Visit History
             </h3>
             {patientData.trend.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-center py-8">
-                No visit data available. Add a new visit to start tracking health metrics.
+                No visit data available. Add a new visit to start tracking
+                health metrics.
               </p>
             ) : (
               <div className="overflow-hidden">
@@ -805,23 +990,31 @@ const PatientDetail = () => {
                     </tr>
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-                    {patientData.trend.map((visit) => (
-                      <tr key={visit.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                    {sortedVisits.map((visit) => (
+                      <tr
+                        key={visit.id}
+                        className="hover:bg-gray-50 dark:hover:bg-gray-700"
+                      >
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                           {formatDate(visit.visit_date)}
                           {visit.visit_time && ` ${visit.visit_time}`}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                          {visit.systolic && visit.diastolic ? `${visit.systolic}/${visit.diastolic}` : 'N/A'}
+                          {visit.systolic && visit.diastolic
+                            ? `${visit.systolic}/${visit.diastolic}`
+                            : "N/A"}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                          {visit.weight ? `${visit.weight} lbs` : 'N/A'}
+                          {visit.weight ? `${visit.weight} lbs` : "N/A"}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                          {visit.bmi ? visit.bmi.toFixed(1) : 'N/A'}
+                          {visit.bmi ? visit.bmi.toFixed(1) : "N/A"}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                          <button onClick={() => handleViewVisitDetails(visit)} className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300">
+                          <button
+                            onClick={() => handleViewVisitDetails(visit)}
+                            className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300"
+                          >
                             View Details
                           </button>
                         </td>
@@ -834,9 +1027,19 @@ const PatientDetail = () => {
           </div>
         </div>
       </div>
-      
-      <VisitDetailsModal isOpen={isVisitDetailsOpen} onClose={() => setIsVisitDetailsOpen(false)} visit={selectedVisit} />
-      {toastMessage && <Toast message={toastMessage.message} type={toastMessage.type} onClose={() => setToastMessage(null)} />}
+
+      <VisitDetailsModal
+        isOpen={isVisitDetailsOpen}
+        onClose={() => setIsVisitDetailsOpen(false)}
+        visit={selectedVisit}
+      />
+      {toastMessage && (
+        <Toast
+          message={toastMessage.message}
+          type={toastMessage.type}
+          onClose={() => setToastMessage(null)}
+        />
+      )}
     </div>
   );
 };

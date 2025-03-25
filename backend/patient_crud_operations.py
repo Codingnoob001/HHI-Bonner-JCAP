@@ -154,15 +154,11 @@ def generate_client_id(first_name, last_name, first_visit_date, birthdate):
         return None
 
 
-# Function to calculate BMI from height and weight
 def calculate_bmi(height, weight):
     """
-    Calculate BMI using height (in or cm) and weight (lb or kg)
+    Calculate BMI using height (in inches) and weight (in pounds)
 
-    If height > 3, assume it's in cm and convert to meters
-    If weight > 150, assume it's in lb and convert to kg
-
-    BMI = weight (kg) / (height (m) * height (m))
+    BMI = (weight (lb) / (height (in) * height (in))) * 703
     """
     if height is None or weight is None:
         return None
@@ -171,23 +167,15 @@ def calculate_bmi(height, weight):
         height_val = float(height)
         weight_val = float(weight)
 
-        # Convert height to meters if needed
-        if height_val > 3:  # Assuming height > 3 means it's in cm
-            height_m = height_val / 100
-        else:  # Height is in meters
-            height_m = height_val
+        if height_val <= 0 or weight_val <= 0:
+            return None  # Avoid division by zero or negative values
 
-        # Convert weight to kg if needed
-        if weight_val > 150:  # Assuming weight > 150 means it's in pounds
-            weight_kg = weight_val * 0.453592
-        else:  # Weight is in kg
-            weight_kg = weight_val
-
-        # Calculate BMI
-        bmi = weight_kg / (height_m * height_m)
+        # Calculate BMI using the standard formula for inches and pounds
+        bmi = (weight_val / (height_val * height_val)) * 703
         return round(bmi, 1)
-    except (ValueError, ZeroDivisionError):
+    except ValueError:
         return None
+
 
 
 # --------- ERROR HANDLING DECORATOR ---------
@@ -246,13 +234,30 @@ def validate_patient_data(data, is_update=False):
     return errors
 
 
+# Update to the validate_visit_data function in patient_crud_operations.py
+
 def validate_visit_data(data):
     """Validate patient visit data"""
     errors = []
 
-    # Required fields
-    if "visit_date" not in data or not data["visit_date"]:
-        errors.append("Missing required field: visit_date")
+    # Required fields - updated to match frontend requirements
+    required_fields = [
+        "visit_date", 
+        "event_type", 
+        "referral_source", 
+        "follow_up", 
+        "systolic", 
+        "diastolic", 
+        "cholesterol", 
+        "fasting", 
+        "glucose",
+        "weight",
+        "acquired_by"
+    ]
+    
+    for field in required_fields:
+        if field not in data or data[field] is None or data[field] == "":
+            errors.append(f"Missing required field: {field}")
 
     # Validate numeric fields
     numeric_fields = ["systolic", "diastolic", "cholesterol", "glucose", "height", "weight", "a1c"]
@@ -272,7 +277,58 @@ def validate_visit_data(data):
             except (ValueError, TypeError):
                 errors.append(f"{field} must be a number")
 
+    # Additional validation for 'fasting' field
+    if "fasting" in data and data["fasting"] is not None and data["fasting"] not in ["YES", "NO"]:
+        errors.append("Fasting must be either 'YES' or 'NO'")
+
     return errors
+
+# Add a new function to retrieve patient height for pre-filling
+
+def get_patient_height(client_id):
+    """
+    Retrieve patient height for pre-filling the visit form
+    
+    Parameters:
+    client_id (str): The patient's client ID
+    
+    Returns:
+    float or None: The patient's height if found, None otherwise
+    """
+    conn = db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # First check the patients table for height
+        cursor.execute("SELECT height FROM patients WHERE client_id = ?", (client_id,))
+        result = cursor.fetchone()
+        
+        if result and result["height"] is not None:
+            return result["height"]
+        
+        # If no height in patients table, look for the most recent visit with height
+        cursor.execute("""
+            SELECT height FROM patient_visits 
+            WHERE client_id = ? AND height IS NOT NULL 
+            ORDER BY visit_date DESC LIMIT 1
+        """, (client_id,))
+        
+        result = cursor.fetchone()
+        if result:
+            return result["height"]
+            
+        return None
+    finally:
+        conn.close()
+
+# Expose the new function through a route if needed
+@app.route("/patients/<client_id>/height", methods=["GET"])
+@handle_errors
+def get_height(client_id):
+    height = get_patient_height(client_id)
+    if height is None:
+        return jsonify({"height": None})
+    return jsonify({"height": height})
 
 
 # Initialize database setup
@@ -468,6 +524,7 @@ def get_patient(client_id):
 
     if not patient:
         return jsonify({"error": "Patient not found"}), 404
+
 
     # Fetch all patient visits sorted by visit_date
     cursor.execute("""
@@ -740,28 +797,16 @@ def update_patient(client_id):
 
             if processed_goals:
                 # Get the visit date to use for goals - prefer the one in the update if provided
-                visit_date_to_use = None
-
-                # Try to use first_visit_date from the update data
-                if "first_visit_date" in data and data["first_visit_date"]:
-                    visit_date_to_use = standardize_date_for_db(data["first_visit_date"])
-
-                # If not in update data, use the one from the database
-                if not visit_date_to_use and "first_visit_date" in patient_data and patient_data["first_visit_date"]:
-                    visit_date_to_use = standardize_date_for_db(patient_data["first_visit_date"])
-
-                # If we still don't have a valid date, use the most recent visit date
-                if not visit_date_to_use:
-                    cursor.execute(
-                        "SELECT MAX(visit_date) as latest_visit FROM patient_visits WHERE client_id = ?",
-                        (client_id,)
-                    )
-                    result = cursor.fetchone()
-                    if result and result['latest_visit']:
-                        visit_date_to_use = result['latest_visit']
-
-                # If we still don't have a valid date, use today's date
-                if not visit_date_to_use:
+                # Always use the most recent visit date for goals
+                cursor.execute(
+                    "SELECT MAX(visit_date) as latest_visit FROM patient_visits WHERE client_id = ?",
+                    (client_id,)
+                )
+                result = cursor.fetchone()
+                if result and result['latest_visit']:
+                    visit_date_to_use = result['latest_visit']
+                else:
+                    # If no visits, use today's date instead of first_visit_date
                     visit_date_to_use = datetime.now().strftime("%Y-%m-%d")
 
                 if visit_date_to_use:
@@ -841,6 +886,36 @@ def update_patient(client_id):
         })
     else:
         return jsonify({"message": "No changes made"})
+
+
+@app.route("/patients/<client_id>/goals-history", methods=["GET"])
+@handle_errors
+def get_patient_goals_history(client_id):
+    conn = db_connection()
+    cursor = conn.cursor()
+
+    # First verify patient exists
+    cursor.execute("SELECT 1 FROM patients WHERE client_id = ?", (client_id,))
+    if not cursor.fetchone():
+        conn.close()
+        return jsonify({"error": "Patient not found"}), 404
+
+    # Get all goals with visit_date
+    cursor.execute("""
+        SELECT pg.*, pv.visit_time 
+        FROM patients_goals pg
+        LEFT JOIN patient_visits pv ON pg.client_id = pv.client_id AND pg.visit_date = pv.visit_date
+        WHERE pg.client_id = ? 
+        ORDER BY pg.visit_date DESC
+    """, (client_id,))
+
+    goals = cursor.fetchall()
+    conn.close()
+
+    if goals:
+        return jsonify([dict(row) for row in goals])
+    else:
+        return jsonify([])
 
 # Delete a patient
 @app.route("/patients/<client_id>", methods=["DELETE"])

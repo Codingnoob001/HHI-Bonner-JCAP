@@ -1,17 +1,23 @@
-import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import Layout from './components/Layout';
-import Dashboard from './components/dashboard/Dashboard';
-import PatientRecords from './components/patients/PatientRecords';
-import PatientDetail from './components/patients/PatientDetail';
-import Billing from './components/billing/Billing';
-import Reports from './components/reports/Reports';
-import FinancialReports from './components/reports/FinancialReports';
-import Settings from './components/settings/Settings';
-import { SearchProvider } from './components/SearchContext';
-import { ThemeProvider } from './components/ThemeContext';
+import React from "react";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route,
+  Navigate,
+} from "react-router-dom";
+import Layout from "./components/Layout";
+import Dashboard from "./components/dashboard/Dashboard";
+import PatientRecords from "./components/patients/PatientRecords";
+import PatientDetail from "./components/patients/PatientDetail";
+import Billing from "./components/billing/Billing";
+import Reports from "./components/reports/Reports";
+import FinancialReports from "./components/reports/FinancialReports";
+import Settings from "./components/settings/Settings";
+import { SearchProvider } from "./components/SearchContext";
+import { ThemeProvider } from "./components/ThemeContext";
 export function App() {
-  return <Router>
+  return (
+    <Router>
       <ThemeProvider>
         <SearchProvider>
           <Layout>
@@ -28,5 +34,6 @@ export function App() {
           </Layout>
         </SearchProvider>
       </ThemeProvider>
-    </Router>;
+    </Router>
+  );
 }
