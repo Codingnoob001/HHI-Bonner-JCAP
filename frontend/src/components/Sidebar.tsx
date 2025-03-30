@@ -50,15 +50,15 @@ const Sidebar = ({ collapsed }) => {
       >
         {collapsed ? (
           <div className="h-8 w-8 rounded-full bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-bold">
-            M
+            H
           </div>
         ) : (
           <div className="flex items-center">
             <div className="h-8 w-8 rounded-full bg-blue-600 dark:bg-blue-500 flex items-center justify-center text-white font-bold mr-2">
-              M
+              H
             </div>
             <span className="text-xl font-semibold text-gray-800 dark:text-gray-200">
-              MedCare
+              HHI 
             </span>
           </div>
         )}

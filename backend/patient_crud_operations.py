@@ -5,6 +5,8 @@ from flask_cors import CORS
 import sqlite3
 from dotenv import load_dotenv
 import functools
+from reports import reporting
+
 
 
 load_dotenv()
@@ -15,6 +17,9 @@ CORS(app,
      origins=["http://localhost:5173", "http://127.0.0.1:5173"], 
      methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
      allow_headers=["Content-Type", "Authorization"])
+
+app.register_blueprint(reporting)
+
 
 # --------- DATABASE SETUP AND UTILITIES ---------
 
