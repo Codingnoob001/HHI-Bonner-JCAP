@@ -144,3 +144,79 @@ export const dashboardApi = {
     return fetchApi(url);
   },
 };
+
+
+// Reports API endpoints
+export const reportsApi = {
+  // Get comprehensive summary for a date range
+  getComprehensiveSummary: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/comprehensive-summary?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get gender distribution for a date range
+  getGenderDistribution: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/gender?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get age distribution for a date range
+  getAgeDistribution: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/age-distribution?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get race/ethnicity distribution for a date range
+  getRaceDistribution: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/race-distribution?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get language distribution for a date range
+  getLanguageDistribution: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/language-distribution?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get event attendance for a date range
+  getEventAttendance: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/event-attendance?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get health metrics for a date range
+  getHealthImprovements: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/health-improvements?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get weight changes for a date range
+  getWeightChanges: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/weight-changes?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Get BMI changes for a date range
+  getBMIChanges: (startDate: string, endDate: string) => {
+    return fetchApi(`/reports/bmi-changes?start_date=${startDate}&end_date=${endDate}`);
+  },
+  
+  // Export report data as a downloadable file (PDF, Excel, etc.)
+  exportReport: async (startDate: string, endDate: string, format: 'pdf' | 'excel' = 'pdf') => {
+    const url = `${API_BASE_URL}/reports/export?start_date=${startDate}&end_date=${endDate}&format=${format}`;
+    
+    // For file downloads, we need to handle the response differently
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Accept': format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      }
+    });
+    
+    if (!response.ok) {
+      // Try to get error message from response
+      try {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `API error: ${response.status}`);
+      } catch (e) {
+        // If we can't parse the error as JSON, throw a generic error
+        throw new Error(`API error: ${response.status}`);
+      }
+    }
+    
+    // Return the raw response for handling the download
+    return response;
+  }
+};

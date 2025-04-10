@@ -898,50 +898,53 @@ def service_totals(year):
     return service_totals_by_date(start_date, end_date, year)
 
 
-# Implementation of service totals by date range
+# Fixed service_totals_by_date function for reports.py
 def service_totals_by_date(start_date, end_date, year=None):
     """Internal implementation of service totals by date range"""
     conn = db_connection()
     cursor = conn.cursor()
-    
-    # Count unique patients who received HRA services
+
+    # Count occurrences of visits with HRA services
+    # Count them in two ways:
+    # 1. By event_type containing 'HRA'
+    # 2. By having non-empty hra field
     cursor.execute("""
-        SELECT COUNT(DISTINCT client_id) as hra_total
-        FROM patient_visits
-        WHERE visit_date BETWEEN ? AND ?
-        AND event_type LIKE '%HRA%'
-    """, (start_date, end_date))
-    
-    hra_total = cursor.fetchone()['hra_total']
-    
-    # Count unique patients who received education services
+        SELECT 
+            (SELECT COUNT(*) FROM patient_visits WHERE visit_date BETWEEN ? AND ? AND event_type LIKE '%HRA%') +
+            (SELECT COUNT(*) FROM patient_visits WHERE visit_date BETWEEN ? AND ? AND hra IS NOT NULL AND hra != '')
+        as hra_total
+    """, (start_date, end_date, start_date, end_date))
+
+    hra_total = cursor.fetchone()[0]
+
+    # Count occurrences of education services
     cursor.execute("""
-        SELECT COUNT(DISTINCT client_id) as edu_total
+        SELECT COUNT(*) as edu_total
         FROM patient_visits
         WHERE visit_date BETWEEN ? AND ?
         AND edu IS NOT NULL AND edu != ''
     """, (start_date, end_date))
-    
-    edu_total = cursor.fetchone()['edu_total']
-    
-    # Count unique patients who received case management services
+
+    edu_total = cursor.fetchone()[0]
+
+    # Count occurrences of case management services
     cursor.execute("""
-        SELECT COUNT(DISTINCT client_id) as cm_total
+        SELECT COUNT(*) as cm_total
         FROM patient_visits
         WHERE visit_date BETWEEN ? AND ?
         AND case_management IS NOT NULL AND case_management != ''
     """, (start_date, end_date))
-    
-    cm_total = cursor.fetchone()['cm_total']
-    
+
+    cm_total = cursor.fetchone()[0]
+
     # Get total services
     total_services = hra_total + edu_total + cm_total
-    
+
     conn.close()
-    
+
     # Use provided year or extract year from start date
     year_to_use = year or datetime.strptime(start_date, "%Y-%m-%d").year
-    
+
     return jsonify({
         'year': year_to_use,
         'date_range': {
@@ -964,7 +967,6 @@ def service_totals_by_date(start_date, end_date, year=None):
             }
         }
     })
-
 
 # New route that supports date range
 @reporting.route('/age-distribution', methods=['GET'])
