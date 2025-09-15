@@ -1,5 +1,5 @@
 # HHI-Bonner-JCAP
-# AUTHORS: Victor Akolo. Lawrencia Agbovi
+# AUTHORS: Victor Akolo & Lawrencia Agbovi
 # Healthcare Information Management System (HIMS)
 
 A comprehensive solution for healthcare organizations to manage patient records, visits, health metrics, and administrative functions.
